@@ -1,17 +1,17 @@
 # Speculative Clinical GraphRAG
 
-&lt;p align="center"&gt;
-  &lt;img src="https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white" alt="Python"&gt;
-  &lt;img src="https://img.shields.io/badge/FastAPI-0.115.6-009688?logo=fastapi&logoColor=white" alt="FastAPI"&gt;
-  &lt;img src="https://img.shields.io/badge/Neo4j-5.27-008CC1?logo=neo4j&logoColor=white" alt="Neo4j"&gt;
-  &lt;img src="https://img.shields.io/badge/LangGraph-0.2.56-1C3C3C?logo=langchain&logoColor=white" alt="LangGraph"&gt;
-  &lt;img src="https://img.shields.io/badge/Pydantic-2.10.4-E92063?logo=pydantic&logoColor=white" alt="Pydantic"&gt;
-  &lt;img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"&gt;
-&lt;/p&gt;
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-blue" alt="Python">
+  <img src="https://img.shields.io/badge/FastAPI-009688" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Neo4j-008CC1" alt="Neo4j">
+  <img src="https://img.shields.io/badge/LangGraph-1C3C3C" alt="LangGraph">
+  <img src="https://img.shields.io/badge/Pydantic-E92063" alt="Pydantic">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+</p>
 
-&lt;p align="center"&gt;
-  &lt;b&gt;A self-correcting clinical knowledge core that validates every diagnostic pathway against strict medical taxonomies before generation.&lt;/b&gt;
-&lt;/p&gt;
+<p align="center">
+  <b>A self-correcting clinical knowledge core that validates every diagnostic pathway against strict medical taxonomies before generation.</b>
+</p>
 
 ---
 
@@ -31,28 +31,28 @@ Medical LLMs hallucinate. They generate plausible-sounding but clinically danger
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         SPECULATIVE-VALIDATE-CORRECT LOOP                    │
-│                                                                              │
-│   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐                │
-│   │   PATIENT    │────▶│  SPECULATIVE │────▶│   SYMBOLIC   │                │
-│   │    NOTE      │     │    REASONER  │     │  VERIFICATION│                │
-│   └──────────────┘     │ (DeepSeek-R1 │     │   (Neo4j)    │                │
-│                        │  / MockLLM)   │     └──────┬───────┘                │
-│                        └──────────────┘            │                        │
-│                              ▲                       │                        │
-│                              │                       ▼                        │
-│                              │              ┌──────────────┐                  │
-│                              │              │   VALID?     │                  │
-│                              │              └──────┬───────┘                  │
-│                              │                     │                          │
-│                    ┌─────────┴──────────┐         │                          │
-│                    │                    │         │                          │
-│                    ▼                    ▼         ▼                          │
-│              ┌──────────┐        ┌──────────┐  ┌──────────┐                  │
-│              │ CORRECT  │        │ FINALIZE │  │ESCALATE  │                  │
-│              │ (Feedback│        │ (Execute │  │ (Human   │                  │
-│              │  Loop)   │        │   RAG)   │  │ Review)  │                  │
-│              └──────────┘        └──────────┘  └──────────┘                  │
+│                         SPECULATIVE-VALIDATE-CORRECT LOOP                   │
+│                                                                             │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────── ──┐               │
+│   │   PATIENT    │────▶│  SPECULATIVE │────▶│   SYMBOLIC    │               │
+│   │    NOTE      │     │    REASONER  │     │  VERIFICATION │               │
+│   └──────────────┘     │ (DeepSeek-R1 │     │   (Neo4j)     │               │
+│                        │  / MockLLM)  │     └───── ─┬───────┘               │
+│                        └──────────────┘              │                      │
+│                              ▲                       │                      │
+│                              │                       ▼                      │
+│                              │              ┌─────────────┐                 │
+│                              │              │   VALID?    │                 │
+│                              │              └─────┬───────┘                 │
+│                              │                    │                         │
+│                    ┌─────────┴──────────┐         │                         │
+│                    │                    │         │                         │
+│                    ▼                    ▼         ▼                         │
+│              ┌──────────┐        ┌──────────┐  ┌──────────┐                 │
+│              │ CORRECT  │        │ FINALIZE │  │ESCALATE  │                 │
+│              │ (Feedback│        │ (Execute │  │ (Human   │                 │
+│              │  Loop)   │        │   RAG)   │  │ Review)  │                 │
+│              └──────────┘        └──────────┘  └──────────┘                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -307,6 +307,6 @@ MIT License — Clinical AI Research & Engineering
 
 ---
 
-&lt;p align="center"&gt;
-  &lt;sub&gt;Built with LangGraph, Neo4j, FastAPI, and a deep respect for clinical safety.&lt;/sub&gt;
-&lt;/p&gt;
+<p align="center">
+  <sub>Built with LangGraph, Neo4j, FastAPI, and a deep respect for clinical safety.</sub>
+</p>
