@@ -1,5 +1,5 @@
-# Speculative Clinical GraphRAG
 
+<h1 align="center">Speculative Clinical GraphRAG</h1>
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-blue" alt="Python">
   <img src="https://img.shields.io/badge/FastAPI-009688" alt="FastAPI">
