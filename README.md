@@ -31,7 +31,7 @@ Medical LLMs hallucinate. They generate plausible-sounding but clinically danger
 ### Architecture Paradigm
 
 <p align="center">
-  <img src="graphrag.png" alt="AgenticRAG" width="700px">
+  <img src="assets/graphrag.png" alt="AgenticRAG" width="700px">
 </p>
 
 
