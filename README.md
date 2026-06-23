@@ -27,34 +27,13 @@ Medical LLMs hallucinate. They generate plausible-sounding but clinically danger
 
 ## 🏗️ Technical Specification
 
-### Architecture Philosophy
+### Architecture Paradigm
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         SPECULATIVE-VALIDATE-CORRECT LOOP                   │
-│                                                                             │
-│   ┌──────────────┐     ┌──────────────┐     ┌──────────── ──┐               │
-│   │   PATIENT    │────▶│  SPECULATIVE │────▶│   SYMBOLIC    │               │
-│   │    NOTE      │     │    REASONER  │     │  VERIFICATION │               │
-│   └──────────────┘     │ (DeepSeek-R1 │     │   (Neo4j)     │               │
-│                        │  / MockLLM)  │     └───── ─┬───────┘               │
-│                        └──────────────┘             │                      │
-│                              ▲                      │                      │
-│                              │                      ▼                      │
-│                              │              ┌─────────────┐                 │
-│                              │              │   VALID?    │                 │
-│                              │              └─────┬───────┘                 │
-│                              │                    │                         │
-│                    ┌─────────┴──────────┐         │                         │
-│                    │                    │         │                         │
-│                    ▼                    ▼         ▼                         │
-│              ┌──────────┐        ┌──────────┐  ┌──────────┐                 │
-│              │ CORRECT  │        │ FINALIZE │  │ESCALATE  │                 │
-│              │ (Feedback│        │ (Execute │  │ (Human   │                 │
-│              │  Loop)   │        │   RAG)   │  │ Review)  │                 │
-│              └──────────┘        └──────────┘  └──────────┘                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/Arch_diag.jpeg" alt="AgenticRAG" width="700px">
+</p>
+
+
 
 ### Core Components
 
