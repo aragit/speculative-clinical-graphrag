@@ -38,9 +38,9 @@ Medical LLMs hallucinate. They generate plausible-sounding but clinically danger
 │   │    NOTE      │     │    REASONER  │     │  VERIFICATION │               │
 │   └──────────────┘     │ (DeepSeek-R1 │     │   (Neo4j)     │               │
 │                        │  / MockLLM)  │     └───── ─┬───────┘               │
-│                        └──────────────┘              │                      │
-│                              ▲                       │                      │
-│                              │                       ▼                      │
+│                        └──────────────┘             │                      │
+│                              ▲                      │                      │
+│                              │                      ▼                      │
 │                              │              ┌─────────────┐                 │
 │                              │              │   VALID?    │                 │
 │                              │              └─────┬───────┘                 │
