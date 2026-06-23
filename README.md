@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
 </p>
 
+
 <p align="center">
   <b>A self-correcting clinical knowledge core that validates every diagnostic pathway against strict medical taxonomies before generation.</b>
 </p>
@@ -30,7 +31,7 @@ Medical LLMs hallucinate. They generate plausible-sounding but clinically danger
 ### Architecture Paradigm
 
 <p align="center">
-  <img src="assets/Arch_diag.jpeg" alt="AgenticRAG" width="700px">
+  <img src="graphrag.png" alt="AgenticRAG" width="700px">
 </p>
 
 
