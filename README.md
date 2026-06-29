@@ -138,6 +138,38 @@ RUNTIME_LLM=ollama OLLAMA_HOST=http://localhost:8000/v1 \
     python -m uvicorn api.main:app --reload
 ```
 
+### DeepSeek-R1 Backend Implementation (GPU)
+
+```bash
+# core/llm_backend.py — DeepSeekR1Backend
+class DeepSeekR1Backend(LLMBackend):
+    """
+    Production backend using DeepSeek-R1-Distill-Qwen-32B via vLLM.
+    Extracts reasoning traces from <think>...</think> tags for validation.
+    """
+    def __init__(self, base_url: str = "http://localhost:8000/v1", model: str = "deepseek-ai/deepseek-r1-distill-qwen-32b"):
+        self.client = openai.AsyncOpenAI(base_url=base_url, api_key="dummy")
+        self.model = model
+
+    async def generate_path(self, patient_note: str) -> List[Dict]:
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": self._build_prompt(patient_note)}],
+            temperature=0.1,
+        )
+        raw = response.choices[0].message.content
+        reasoning, triplets = self._extract_reasoning(raw)
+        return {"triplets": triplets, "reasoning": reasoning}
+
+    def _extract_reasoning(self, raw: str) -> Tuple[str, List[Dict]]:
+        """Extract <think>...</think> reasoning trace and JSON triplets."""
+        think_match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
+        reasoning = think_match.group(1).strip() if think_match else ""
+        # Parse JSON triplets from remaining text
+        ...
+        return reasoning, triplets
+```
+
 ---
 
 ## 🔬 API Reference
