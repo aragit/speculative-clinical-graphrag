@@ -23,22 +23,28 @@ def rag():
     except Exception:
         pass
 
+
 def test_valid_path_1_iteration(rag):
     result = rag.run("Patient has dyspnea and orthopnea")
     assert result["status"] == "valid"
     assert result["iteration_count"] == 1
     assert len(result["validation_result"]["valid_edges"]) > 0
     assert any(e["node"] == "ingest" for e in result["audit_log"])
+    assert len(result.get("extracted_symptoms", [])) == 2
+    assert any("dyspnea" in str(k).lower() for k in result.get("ontology_mappings", {}))
 
-def test_invalid_then_corrected(rag):
+
+def test_invalid_path_escalation(rag):
     result = rag.run("Patient has unknown rare symptom XYZ123")
     assert result["status"] == "escalated"
-    assert result["iteration_count"] <= 3
+    assert result["iteration_count"] == 1
 
-def test_escalation_after_max_iterations(rag):
+
+def test_escalate_on_nonsensical_input(rag):
     result = rag.run("Completely nonsensical medical text")
     assert result["status"] == "escalated"
     assert "human review" in result["final_output"].lower()
+
 
 def test_reasoning_trace_in_response(rag):
     result = rag.run("Patient has chest pain")

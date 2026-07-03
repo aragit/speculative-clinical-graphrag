@@ -11,7 +11,7 @@ class SpeculateResponse(BaseModel):
     validation: Dict
     iterations: int
     final_output: str
-    status: Literal["valid", "corrected", "escalated"]
+    status: Literal["valid", "corrected", "escalated", "error"]
     reasoning_trace: Optional[str] = Field(default=None, description="Clinician-reviewable reasoning")
     retrieval_sources: Optional[List[Dict]] = Field(default=None, description="Hybrid RAG source attribution")
     audit_log: Optional[List[Dict]] = Field(default=None)

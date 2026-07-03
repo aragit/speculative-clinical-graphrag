@@ -325,6 +325,27 @@ EDGES = [
 ]
 
 
+def lookup_edges(from_node: str, relation: Optional[str] = None) -> List[Dict]:
+    """Symbolic lookup: find all ontology edges originating from from_node.
+    Pure in-memory operation on the EDGES constant. No LLM, no Neo4j needed."""
+    results = []
+    for h, r, t in EDGES:
+        if h.lower() == from_node.lower() and (relation is None or r == relation):
+            results.append({"head": h, "relation": r, "tail": t})
+    return results
+
+
+def lookup_all_by_symptoms(symptoms: List[str]) -> Dict[str, List[Dict]]:
+    """Batch lookup: for each symptom, return all ontology edges.
+    Returns {symptom: [{head, relation, tail}, ...]}"""
+    mappings = {}
+    for symptom in symptoms:
+        edges = lookup_edges(symptom)
+        if edges:
+            mappings[symptom] = edges
+    return mappings
+
+
 class Neo4jVerifier:
     def __init__(self, uri: str = None, auth: tuple = None, max_pool_size: int = 50):
         uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -497,7 +518,7 @@ class OPAClient:
     async def evaluate(self, payload: Dict) -> Dict:
         try:
             response = await self.client.post(
-                f"{self.opa_url}/diagnostic_path/allow",
+                f"{self.opa_url}/allow",
                 json={"input": payload},
             )
             response.raise_for_status()

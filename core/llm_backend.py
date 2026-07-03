@@ -16,6 +16,14 @@ class LLMBackend(ABC):
     async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
         return {}
 
+    @abstractmethod
+    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        return {"symptoms": []}
+
+    @abstractmethod
+    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
+        return {"triplets": [], "reasoning": ""}
+
     @property
     @abstractmethod
     def backend_type(self) -> str:
@@ -166,6 +174,25 @@ class MockLLMBackend(LLMBackend):
             reasoning = "MockLLM: no valid matches after correction, forcing escalation."
         return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
 
+    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        note_lower = patient_note.lower()
+        symptoms = []
+        for keyword in self.MOCK_KNOWLEDGE:
+            if keyword in note_lower:
+                symptoms.append({"term": keyword.title(), "confidence": 0.95})
+        return {"symptoms": symptoms}
+
+    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
+        matched = []
+        for symptom in symptoms:
+            key = symptom.lower()
+            if key in self.MOCK_KNOWLEDGE:
+                for t in self.MOCK_KNOWLEDGE[key]:
+                    matched.append(copy.deepcopy(t))
+        if not matched:
+            matched = [{"head": "Unknown", "relation": "INDICATES", "tail": "Unknown Condition", "confidence": 0.5}]
+        return {"triplets": matched, "reasoning": "MockLLM differential from ontology mappings"}
+
 class OllamaBackend(LLMBackend):
     def __init__(self, model: str = "gemma2:2b", host: str = "http://localhost:11434", timeout: float = 60.0):
         self.model = model
@@ -224,6 +251,42 @@ Violations: {json.dumps(violations)}
 Prior reasoning: {prior_reasoning}
 Patient note: {patient_note}
 Regenerate respecting constraints. Output JSON array only."""
+
+    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        prompt = f"""Extract only the medical symptoms and findings from this text.
+Return a JSON object with a "symptoms" array of strings.
+Patient note: {patient_note}
+Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
+        try:
+            response = await self.client.post(
+                f"{self.host}/api/generate",
+                json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            parsed = json.loads(data["response"])
+            return {"symptoms": parsed.get("symptoms", [])}
+        except Exception as e:
+            return {"symptoms": []}
+
+    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
+        prompt = f"""You are a clinical reasoning engine. Given these extracted symptoms and their known ontology mappings, produce a ranked differential diagnosis.
+Symptoms: {json.dumps(symptoms)}
+Known ontology mappings (symptom → condition): {json.dumps(ontology_mappings)}
+Patient context: {json.dumps(patient_context or {})}
+Output a JSON array of triples: [{{"head": "Symptom", "relation": "INDICATES", "tail": "Condition", "confidence": 0.9}}]"""
+        try:
+            response = await self.client.post(
+                f"{self.host}/api/generate",
+                json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            parsed = json.loads(data["response"])
+            triplets = parsed if isinstance(parsed, list) else parsed.get("triplets", [])
+            return {"triplets": triplets, "reasoning": f"Ollama differential for {len(symptoms)} symptoms"}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"Ollama differential error: {e}"}
 
 class DeepSeekR1Backend(LLMBackend):
     def __init__(self, base_url: str = "http://localhost:8000/v1", model: str = "deepseek-ai/deepseek-r1-distill-qwen-32b", timeout: float = 120.0):
@@ -296,6 +359,159 @@ The ontology validator rejected these violations: {json.dumps(violations)}
 Patient note: {patient_note}
 Think carefully inside <think> tags about why each violation occurred and how to fix it. Then output corrected JSON array."""
 
+    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"symptoms": []}
+        prompt = f"""<think>Identify the key medical symptoms and findings in this patient note.</think>
+Patient note: {patient_note}
+Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=1024,
+            )
+            raw = response.choices[0].message.content or ""
+            from core.reasoning_extractor import extract_reasoning_trace
+            _, triplets = extract_reasoning_trace(raw)
+            return {"symptoms": triplets if isinstance(triplets, list) else []}
+        except Exception as e:
+            return {"symptoms": []}
+
+    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"triplets": [], "reasoning": "OpenAI client not installed"}
+        prompt = f"""<think>Given these symptoms and their known ontology mappings, produce a ranked differential diagnosis.</think>
+Symptoms: {json.dumps(symptoms)}
+Known ontology mappings: {json.dumps(ontology_mappings)}
+Patient context: {json.dumps(patient_context or {})}
+Output JSON array: [{{"head": "Symptom", "relation": "INDICATES", "tail": "Condition", "confidence": 0.9}}]"""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=2048,
+            )
+            raw = response.choices[0].message.content or ""
+            from core.reasoning_extractor import extract_reasoning_trace
+            reasoning, triplets = extract_reasoning_trace(raw)
+            return {"triplets": triplets, "reasoning": reasoning}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"DeepSeek-R1 differential error: {e}"}
+
+class VLLMBackend(LLMBackend):
+    def __init__(self, base_url: str = "http://localhost:8000/v1", model: str = "deepseek-ai/deepseek-r1-distill-qwen-32b", timeout: float = 120.0):
+        self.base_url = base_url
+        self.model = model
+        try:
+            import openai
+            self.client = openai.AsyncOpenAI(base_url=base_url, api_key="not-needed", timeout=timeout)
+        except ImportError:
+            self.client = None
+
+    @property
+    def backend_type(self) -> str:
+        return "vllm"
+
+    async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
+        from core.reasoning_extractor import extract_reasoning_trace
+        prompt = self._build_prompt(patient_note, context)
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            raw = response.choices[0].message.content or ""
+            reasoning, triplets = extract_reasoning_trace(raw)
+            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"vLLM error: {e}", "dag_plan": None}
+
+    async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
+        from core.reasoning_extractor import extract_reasoning_trace, validate_reasoning_coherence
+        prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            raw = response.choices[0].message.content or ""
+            reasoning, triplets = extract_reasoning_trace(raw)
+            coherent = validate_reasoning_coherence(reasoning, prior_reasoning, violations)
+            if not coherent:
+                reasoning += " [WARNING: reasoning may not fully address prior violations]"
+            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"vLLM correction error: {e}", "dag_plan": None}
+
+    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"symptoms": []}
+        prompt = f"""<think>Identify the key medical symptoms and findings in this patient note.</think>
+Patient note: {patient_note}
+Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=1024,
+            )
+            raw = response.choices[0].message.content or ""
+            from core.reasoning_extractor import extract_reasoning_trace
+            _, triplets = extract_reasoning_trace(raw)
+            symptoms = triplets if isinstance(triplets, list) else []
+            return {"symptoms": symptoms}
+        except Exception as e:
+            return {"symptoms": []}
+
+    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"triplets": [], "reasoning": "OpenAI client not installed"}
+        prompt = f"""<think>Given these symptoms and their known ontology mappings, produce a ranked differential diagnosis.</think>
+Symptoms: {json.dumps(symptoms)}
+Known ontology mappings: {json.dumps(ontology_mappings)}
+Patient context: {json.dumps(patient_context or {})}
+Output JSON array: [{{"head": "Symptom", "relation": "INDICATES", "tail": "Condition", "confidence": 0.9}}]"""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=2048,
+            )
+            raw = response.choices[0].message.content or ""
+            from core.reasoning_extractor import extract_reasoning_trace
+            reasoning, triplets = extract_reasoning_trace(raw)
+            return {"triplets": triplets, "reasoning": reasoning}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"vLLM differential error: {e}"}
+
+    def _build_prompt(self, patient_note: str, context: Optional[Dict]) -> str:
+        ctx = f"Context: {json.dumps(context)}\n" if context else ""
+        return f"""You are a clinical reasoning engine. Think step by step inside <think> tags, then output JSON.
+{ctx}Patient note: {patient_note}
+Step 1: Identify key symptoms and entities.
+Step 2: Map to known diagnostic pathways.
+Step 3: Assess confidence.
+Output JSON array: [{{"head": "...", "relation": "INDICATES", "tail": "...", "confidence": 0.9}}]"""
+
+    def _build_correction_prompt(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict]) -> str:
+        return f"""Previous reasoning: {prior_reasoning}
+The ontology validator rejected these violations: {json.dumps(violations)}
+Patient note: {patient_note}
+Think carefully inside <think> tags about why each violation occurred and how to fix it. Then output corrected JSON array."""
+
 class SemanticRouter:
     def __init__(self, config: Optional[Dict] = None):
         self.config = config or {}
@@ -307,5 +523,5 @@ class SemanticRouter:
         if any(k in note_lower for k in self.simple_keywords) and word_count < 30:
             return self.config.get("simple_backend", "mock")
         if any(phrase in note_lower for phrase in ["differential", "multiple comorbidities", "unclear diagnosis", "complex"]):
-            return "deepseek_r1"
+            return self.config.get("complex_backend", "deepseek_r1")
         return self.config.get("default_backend", "ollama")

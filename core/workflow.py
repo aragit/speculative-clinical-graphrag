@@ -1,30 +1,44 @@
 from typing import TypedDict, List, Dict, Literal, Optional
 from langgraph.graph import StateGraph, END
 from core.llm_backend import LLMBackend, MockLLMBackend, SemanticRouter
-from core.verification_layer import Neo4jVerifier, SymbolicVerifier
+from core.verification_layer import Neo4jVerifier, SymbolicVerifier, OPAClient, lookup_all_by_symptoms
 from core.reasoning_extractor import surface_reasoning_for_clinician
 import logging
 import time
 import json
 import asyncio
+import nest_asyncio
 import re
+
+nest_asyncio.apply()
 
 logger = logging.getLogger(__name__)
 
 
 class GraphState(TypedDict):
+    # Input (immutable after ingest)
     patient_note: str
-    patient_context: Optional[Dict]
+    patient_context: Dict
+
+    # Step A: LLM-extracted symptoms
+    extracted_symptoms: List[Dict]
+
+    # Step B: Symbolic ontology mapping (no LLM)
+    ontology_mappings: Dict[str, List[Dict]]
+
+    # Step C: LLM-assessed differential
     proposed_path: List[Dict]
-    reasoning_trace: str
+
+    # Step D: Safety verification (OPA + symbolic rules)
+    safety_result: Dict
+
+    # Output
     validation_result: Dict
-    retrieval_context: Optional[Dict]
-    iteration_count: int
-    max_iterations: int
+    reasoning_trace: str
     final_output: str
-    status: Literal["valid", "corrected", "escalated", "error"]
+    status: Literal["valid", "escalated", "error"]
     audit_log: List[Dict]
-    dag_plan: Optional[Dict]
+    iteration_count: int
     backend_key: str
 
 
@@ -34,11 +48,13 @@ class SpeculativeGraphRAG:
         llm: Optional[LLMBackend] = None,
         verifier: Optional[Neo4jVerifier] = None,
         symbolic_verifier: Optional[SymbolicVerifier] = None,
+        opa_client: Optional[OPAClient] = None,
         max_iterations: int = 3,
     ):
         self.llm = llm or MockLLMBackend()
         self.verifier = verifier or Neo4jVerifier()
         self.symbolic = symbolic_verifier or SymbolicVerifier()
+        self.opa = opa_client or OPAClient()
         self.router = SemanticRouter()
         self.max_iterations = max_iterations
         self.workflow = self._build_graph()
@@ -46,24 +62,22 @@ class SpeculativeGraphRAG:
     def _build_graph(self):
         workflow = StateGraph(GraphState)
         workflow.add_node("ingest", self._ingest)
-        workflow.add_node("speculate", self._speculate)
-        workflow.add_node("retrieve", self._retrieve)
-        workflow.add_node("verify", self._verify)
-        workflow.add_node("correct", self._correct)
-        workflow.add_node("validate", self._validate)
-        workflow.add_node("escalate", self._escalate)
+        workflow.add_node("extract_symptoms", self._extract_symptoms)
+        workflow.add_node("map_to_ontology", self._map_to_ontology)
+        workflow.add_node("assess_differential", self._assess_differential)
+        workflow.add_node("verify_safety", self._verify_safety)
         workflow.add_node("synthesize", self._synthesize)
+        workflow.add_node("escalate", self._escalate)
         workflow.set_entry_point("ingest")
-        workflow.add_edge("ingest", "speculate")
-        workflow.add_edge("speculate", "retrieve")
-        workflow.add_edge("retrieve", "verify")
+        workflow.add_edge("ingest", "extract_symptoms")
+        workflow.add_edge("extract_symptoms", "map_to_ontology")
+        workflow.add_edge("map_to_ontology", "assess_differential")
+        workflow.add_edge("assess_differential", "verify_safety")
         workflow.add_conditional_edges(
-            "verify",
+            "verify_safety",
             self._route,
-            {"validate": "validate", "correct": "correct", "escalate": "escalate"},
+            {"synthesize": "synthesize", "escalate": "escalate"},
         )
-        workflow.add_edge("correct", "verify")
-        workflow.add_edge("validate", "synthesize")
         workflow.add_edge("synthesize", END)
         workflow.add_edge("escalate", END)
         return workflow.compile()
@@ -80,106 +94,116 @@ class SpeculativeGraphRAG:
 
     def _ingest(self, state: GraphState):
         note = state["patient_note"]
-        ctx = state.get("patient_context") or {}
-        if not ctx:
-            age_match = re.search(r'(\\d+)\\s*-?\\s*year\\s*-?\\s*old', note, re.IGNORECASE)
-            if age_match:
-                ctx["age"] = int(age_match.group(1))
-            gender_match = re.search(r'\\b(male|female|man|woman)\\b', note, re.IGNORECASE)
-            if gender_match:
-                g = gender_match.group(1).lower()
-                ctx["gender"] = "male" if g in ("male", "man") else "female"
-        state["patient_context"] = ctx
+        ctx = dict(state.get("patient_context") or {})
+        age_match = re.search(r'(\d+)\s*-?\s*year\s*-?\s*old', note, re.IGNORECASE)
+        if age_match:
+            ctx["age"] = int(age_match.group(1))
+        gender_match = re.search(r'\b(male|female|man|woman)\b', note, re.IGNORECASE)
+        if gender_match:
+            g = gender_match.group(1).lower()
+            ctx["gender"] = "male" if g in ("male", "man") else "female"
+        meds_match = re.findall(r'\b(Warfarin|Aspirin|Metformin|Insulin|Furosemide|Lisinopril|Atorvastatin)\b', note, re.IGNORECASE)
+        if meds_match:
+            ctx["medications"] = list(set(m.title() for m in meds_match))
         self._log(state, "ingest", f"ctx={ctx}")
-        return {"patient_context": ctx}
+        return {"patient_context": ctx, "iteration_count": 1}
 
-    def _speculate(self, state: GraphState):
+    def _extract_symptoms(self, state: GraphState):
         note = state["patient_note"]
-        result = asyncio.run(
-            self.llm.generate_path(note, state.get("patient_context"))
+        result = asyncio.get_event_loop().run_until_complete(
+            self.llm.extract_symptoms(note, state.get("patient_context"))
         )
-        self._log(state, "speculate", f"triplets={len(result['triplets'])}")
-        return {
-            "proposed_path": result["triplets"],
-            "reasoning_trace": result.get("reasoning", ""),
-            "iteration_count": state.get("iteration_count", 0) + 1,
-        }
+        symptoms = result.get("symptoms", [])
+        self._log(state, "extract_symptoms", f"found {len(symptoms)} symptoms: {symptoms}")
+        return {"extracted_symptoms": symptoms}
 
-    def _retrieve(self, state: GraphState):
-        self._log(state, "retrieve", "hybrid RAG stub")
-        return {"retrieval_context": {"vector_results": [], "graph_results": [], "merged_context": ""}}
+    def _map_to_ontology(self, state: GraphState):
+        symptoms = [s["term"] for s in state.get("extracted_symptoms", [])]
+        if not symptoms:
+            return {"ontology_mappings": {}}
+        mappings = lookup_all_by_symptoms(symptoms)
+        total_edges = sum(len(v) for v in mappings.values())
+        self._log(state, "map_to_ontology", f"mapped {len(mappings)} symptoms to {total_edges} ontology edges")
+        return {"ontology_mappings": mappings}
 
-    def _verify(self, state: GraphState):
-        path = state["proposed_path"]
+    def _assess_differential(self, state: GraphState):
+        symptoms = [s["term"] for s in state.get("extracted_symptoms", [])]
+        mappings_flat = []
+        for symptom_edges in state.get("ontology_mappings", {}).values():
+            mappings_flat.extend(symptom_edges)
+        result = asyncio.get_event_loop().run_until_complete(
+            self.llm.assess_differential(symptoms, mappings_flat, state.get("patient_context"))
+        )
+        triplets = result.get("triplets", [])
+        reasoning = result.get("reasoning", "")
+        self._log(state, "assess_differential", f"proposed {len(triplets)} differential edges")
+        return {"proposed_path": triplets, "reasoning_trace": reasoning}
+
+    def _verify_safety(self, state: GraphState):
+        path = state.get("proposed_path", [])
+        ctx = state.get("patient_context", {})
+
         neo_result = self.verifier.validate(path)
-        sym_result = self.symbolic.validate(path, state.get("patient_context"))
-        merged_valid = neo_result["is_valid"] and sym_result["is_valid"]
+        sym_result = self.symbolic.validate(path, ctx)
+        opa_result = asyncio.get_event_loop().run_until_complete(self.opa.evaluate({"proposed_path": path}))
+
+        opa_allow = opa_result.get("allow", True)
+        merged_valid = neo_result["is_valid"] and sym_result["is_valid"] and opa_allow
         merged_violations = neo_result["violations"] + sym_result["violations"]
-        merged_edges = list({json.dumps(e, sort_keys=True): e for e in (neo_result["valid_edges"] + sym_result["valid_edges"])}.values())
-        decay = min(neo_result.get("confidence_decay", 1.0), sym_result.get("confidence_decay", 1.0))
-        result = {
+        if not opa_allow:
+            merged_violations.append({"reason": "OPA policy blocked the proposed path", "triplet": {}})
+
+        merged_edges = list(
+            {json.dumps(e, sort_keys=True): e for e in (
+                neo_result["valid_edges"] + sym_result["valid_edges"]
+            )}.values()
+        )
+        decay = min(
+            neo_result.get("confidence_decay", 1.0),
+            sym_result.get("confidence_decay", 1.0),
+        )
+        safety_result = {
+            "is_safe": merged_valid,
+            "violations": merged_violations,
+            "opa_allowed": opa_allow,
+            "neo4j_valid": neo_result["is_valid"],
+            "symbolic_valid": sym_result["is_valid"],
+        }
+        validation_result = {
             "is_valid": merged_valid,
             "valid_edges": merged_edges,
             "violations": merged_violations,
-            "total_checked": neo_result["total_checked"],
+            "total_checked": len(path),
             "confidence_decay": decay,
-            "neo4j_result": neo_result,
-            "symbolic_result": sym_result,
         }
-        self._log(state, "verify", f"valid={merged_valid} v={len(merged_violations)}")
-        return {"validation_result": result}
+        self._log(state, "verify_safety", f"safe={merged_valid} violations={len(merged_violations)}")
+        return {"safety_result": safety_result, "validation_result": validation_result}
 
-    def _route(self, state: GraphState) -> Literal["validate", "correct", "escalate"]:
-        if state["validation_result"]["is_valid"]:
-            return "validate"
-        if state["iteration_count"] >= state["max_iterations"]:
-            return "escalate"
-        return "correct"
-
-    def _correct(self, state: GraphState):
-        note = state["patient_note"]
-        violations = state["validation_result"]["violations"]
-        prior = state["reasoning_trace"]
-        ctx = state.get("patient_context", {})
-        ctx["iteration"] = state.get("iteration_count", 1)
-        result = asyncio.run(
-            self.llm.regenerate_with_feedback(note, violations, prior, ctx)
-        )
-        self._log(state, "correct", f"new_triplets={len(result['triplets'])}")
-        return {
-            "proposed_path": result["triplets"],
-            "reasoning_trace": result.get("reasoning", prior),
-            "iteration_count": state.get("iteration_count", 0) + 1,
-        }
-
-    def _validate(self, state: GraphState):
-        self._log(state, "validate", "path accepted")
-        return {"status": "valid"}
-
-    def _escalate(self, state: GraphState):
-        reason = f"Escalated after {state['iteration_count']} attempts. Violations: {len(state['validation_result']['violations'])}"
-        self._log(state, "escalate", reason)
-        return {
-            "status": "escalated",
-            "final_output": f"Escalated to human review. {reason}",
-        }
+    def _route(self, state: GraphState) -> Literal["synthesize", "escalate"]:
+        if state.get("safety_result", {}).get("is_safe", False):
+            return "synthesize"
+        return "escalate"
 
     def _synthesize(self, state: GraphState):
-        path = state["proposed_path"]
-        reasoning = surface_reasoning_for_clinician(state["reasoning_trace"], 1500)
+        path = state.get("proposed_path", [])
+        reasoning = surface_reasoning_for_clinician(state.get("reasoning_trace", ""), 1500)
         sources = []
-        for e in state["validation_result"].get("valid_edges", []):
+        for e in state.get("validation_result", {}).get("valid_edges", []):
             sources.append({
                 "head": e.get("head"),
                 "relation": e.get("relation"),
                 "tail": e.get("tail"),
-                "validated_by": "neo4j+symbolic",
+                "validated_by": "neo4j+symbolic+opa",
             })
         output = {
             "validated_path": path,
             "reasoning_summary": reasoning,
             "source_attribution": sources,
             "patient_context": state.get("patient_context"),
+            "ontology_mappings": {
+                sym: len(edges)
+                for sym, edges in state.get("ontology_mappings", {}).items()
+            },
         }
         self._log(state, "synthesize", f"sources={len(sources)}")
         return {
@@ -187,20 +211,33 @@ class SpeculativeGraphRAG:
             "status": "valid",
         }
 
+    def _escalate(self, state: GraphState):
+        existing_status = state.get("status", "")
+        if existing_status == "escalated":
+            return state
+
+        violations = state.get("safety_result", {}).get("violations", [])
+        reason = f"Escalated after {state['iteration_count']} attempt(s). Violations: {len(violations)}"
+        self._log(state, "escalate", reason)
+        return {
+            "status": "escalated",
+            "final_output": f"Escalated to human review. {reason} Violations: {json.dumps(violations, indent=2)}",
+        }
+
     def run(self, patient_note: str, patient_context: Optional[Dict] = None, backend_key: Optional[str] = None) -> GraphState:
         initial_state: GraphState = {
             "patient_note": patient_note,
-            "patient_context": patient_context,
+            "patient_context": patient_context or {},
+            "extracted_symptoms": [],
+            "ontology_mappings": {},
             "proposed_path": [],
-            "reasoning_trace": "",
+            "safety_result": {},
             "validation_result": {},
-            "retrieval_context": None,
-            "iteration_count": 0,
-            "max_iterations": self.max_iterations,
+            "reasoning_trace": "",
             "final_output": "",
             "status": "valid",
             "audit_log": [],
-            "dag_plan": None,
+            "iteration_count": 0,
             "backend_key": backend_key or "",
         }
         return self.workflow.invoke(initial_state, config={"recursion_limit": 10})

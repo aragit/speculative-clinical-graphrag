@@ -9,7 +9,9 @@ def neo4j():
         with v.driver.session() as s:
             s.run("RETURN 1")
     except Exception as e:
-        pytest.skip(f"Neo4j not available: {e}")
+        pytest.fail(
+            f"Neo4j required for integration tests. Start with: docker compose up -d neo4j\n{e}"
+        )
     yield v
     v.close()
 
@@ -37,4 +39,4 @@ async def test_opa_policy_block():
     opa = OPAClient(opa_url="http://localhost:8181/v1/data/clinical")
     payload = {"proposed_path": [{"head": "Aspirin", "relation": "INDICATES", "tail": "Warfarin"}]}
     result = await opa.evaluate(payload)
-    assert "allow" in result
+    assert result["allow"] is False, "OPA must be running to enforce policies. Start with: docker compose up -d opa"

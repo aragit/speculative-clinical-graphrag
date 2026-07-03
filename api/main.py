@@ -109,7 +109,10 @@ async def speculate(request: SpeculateRequest):
             final_output=result["final_output"],
             status=result["status"],
             reasoning_trace=result.get("reasoning_trace"),
-            retrieval_sources=result.get("retrieval_context", {}).get("graph_results", []) if result.get("retrieval_context") else None,
+            retrieval_sources=[
+                {"symptom": sym, "mapped_conditions": len(edges)}
+                for sym, edges in result.get("ontology_mappings", {}).items()
+            ] if result.get("ontology_mappings") else None,
             audit_log=result.get("audit_log"),
         )
     except Exception as e:
