@@ -52,53 +52,6 @@ Medical LLMs hallucinate when given open-ended generative control. Even with pos
 
 ## 🏗 Architecture
 
-### Type 2 Pipeline
-
-```
-Patient Note
-    │
-    ▼
-┌─────────────────┐
-│  1. Ingest       │  Extract age, gender, medications from text
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  2. Retrieve     │  Hybrid RAG: Qdrant vector search + Neo4j graph traversal
-│     Context      │  → merged clinical context
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  3. Extract      │  Bounded LLM call: extract structured symptoms
-│     Symptoms     │  from patient note + retrieval context
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  4. Map to       │  Pure symbolic: lookup_all_by_symptoms()
-│     Ontology     │  → no LLM, no database (in-memory EDGES constant)
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  5. Assess       │  Bounded LLM call: propose differential diagnosis
-│     Differential │  triplets (head-relation-tail) from mapped ontology
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  6. Verify       │  3-way safety check:
-│     Safety       │  ├─ Neo4j Cypher (or in-memory fallback)
-│                  │  ├─ SymbolicVerifier (drug interactions, age rules)
-│                  │  └─ OPA Rego policies (Aspirin+Warfarin, etc.)
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐ ┌────────┐
-│Synthesize│ │Escalate│  ← if safety check fails
-└────────┘ └────────┘
-    │
-    ▼
- Validated Response + Reasoning Trace
-```
-
 ### Core Components
 
 | Component | Technology | Role |
