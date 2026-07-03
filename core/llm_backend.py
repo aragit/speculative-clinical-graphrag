@@ -288,8 +288,8 @@ Output a JSON array of triples: [{{"head": "Symptom", "relation": "INDICATES", "
         except Exception as e:
             return {"triplets": [], "reasoning": f"Ollama differential error: {e}"}
 
-class DeepSeekR1Backend(LLMBackend):
-    def __init__(self, base_url: str = "http://localhost:8000/v1", model: str = "deepseek-ai/deepseek-r1-distill-qwen-32b", timeout: float = 120.0):
+class OpenAICompatBackend(LLMBackend):
+    def __init__(self, base_url: str, model: str, timeout: float = 120.0):
         self.base_url = base_url
         self.model = model
         self.timeout = timeout
@@ -298,49 +298,75 @@ class DeepSeekR1Backend(LLMBackend):
             self.client = openai.AsyncOpenAI(base_url=base_url, api_key="not-needed", timeout=timeout)
         except ImportError:
             self.client = None
+        self._client_available = self.client is not None
 
-    @property
-    def backend_type(self) -> str:
-        return "deepseek_r1"
+    async def _chat(self, prompt: str, max_tokens: int = 4096) -> str:
+        if not self._client_available:
+            return ""
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content or ""
 
     async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
+        if not self._client_available:
             return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
         from core.reasoning_extractor import extract_reasoning_trace
         prompt = self._build_prompt(patient_note, context)
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=4096,
-            )
-            raw = response.choices[0].message.content or ""
+            raw = await self._chat(prompt)
             reasoning, triplets = extract_reasoning_trace(raw)
             return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
         except Exception as e:
-            return {"triplets": [], "reasoning": f"DeepSeek-R1 error: {e}", "dag_plan": None}
+            return {"triplets": [], "reasoning": f"{self.backend_type} error: {e}", "dag_plan": None}
 
     async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
+        if not self._client_available:
             return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
         from core.reasoning_extractor import extract_reasoning_trace, validate_reasoning_coherence
         prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=4096,
-            )
-            raw = response.choices[0].message.content or ""
+            raw = await self._chat(prompt)
             reasoning, triplets = extract_reasoning_trace(raw)
             coherent = validate_reasoning_coherence(reasoning, prior_reasoning, violations)
             if not coherent:
                 reasoning += " [WARNING: reasoning may not fully address prior violations]"
             return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
         except Exception as e:
-            return {"triplets": [], "reasoning": f"DeepSeek-R1 correction error: {e}", "dag_plan": None}
+            return {"triplets": [], "reasoning": f"{self.backend_type} correction error: {e}", "dag_plan": None}
+
+    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        if not self._client_available:
+            return {"symptoms": []}
+        prompt = f"""<think>Identify the key medical symptoms and findings in this patient note.</think>
+Patient note: {patient_note}
+Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
+        try:
+            raw = await self._chat(prompt, max_tokens=1024)
+            from core.reasoning_extractor import extract_reasoning_trace
+            _, triplets = extract_reasoning_trace(raw)
+            return {"symptoms": triplets if isinstance(triplets, list) else []}
+        except Exception as e:
+            return {"symptoms": []}
+
+    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
+        if not self._client_available:
+            return {"triplets": [], "reasoning": "OpenAI client not installed"}
+        prompt = f"""<think>Given these symptoms and their known ontology mappings, produce a ranked differential diagnosis.</think>
+Symptoms: {json.dumps(symptoms)}
+Known ontology mappings: {json.dumps(ontology_mappings)}
+Patient context: {json.dumps(patient_context or {})}
+Output JSON array: [{{"head": "Symptom", "relation": "INDICATES", "tail": "Condition", "confidence": 0.9}}]"""
+        try:
+            raw = await self._chat(prompt, max_tokens=2048)
+            from core.reasoning_extractor import extract_reasoning_trace
+            reasoning, triplets = extract_reasoning_trace(raw)
+            return {"triplets": triplets, "reasoning": reasoning}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"{self.backend_type} differential error: {e}"}
 
     def _build_prompt(self, patient_note: str, context: Optional[Dict]) -> str:
         ctx = f"Context: {json.dumps(context)}\n" if context else ""
@@ -359,158 +385,23 @@ The ontology validator rejected these violations: {json.dumps(violations)}
 Patient note: {patient_note}
 Think carefully inside <think> tags about why each violation occurred and how to fix it. Then output corrected JSON array."""
 
-    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
-            return {"symptoms": []}
-        prompt = f"""<think>Identify the key medical symptoms and findings in this patient note.</think>
-Patient note: {patient_note}
-Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1024,
-            )
-            raw = response.choices[0].message.content or ""
-            from core.reasoning_extractor import extract_reasoning_trace
-            _, triplets = extract_reasoning_trace(raw)
-            return {"symptoms": triplets if isinstance(triplets, list) else []}
-        except Exception as e:
-            return {"symptoms": []}
 
-    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
-            return {"triplets": [], "reasoning": "OpenAI client not installed"}
-        prompt = f"""<think>Given these symptoms and their known ontology mappings, produce a ranked differential diagnosis.</think>
-Symptoms: {json.dumps(symptoms)}
-Known ontology mappings: {json.dumps(ontology_mappings)}
-Patient context: {json.dumps(patient_context or {})}
-Output JSON array: [{{"head": "Symptom", "relation": "INDICATES", "tail": "Condition", "confidence": 0.9}}]"""
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=2048,
-            )
-            raw = response.choices[0].message.content or ""
-            from core.reasoning_extractor import extract_reasoning_trace
-            reasoning, triplets = extract_reasoning_trace(raw)
-            return {"triplets": triplets, "reasoning": reasoning}
-        except Exception as e:
-            return {"triplets": [], "reasoning": f"DeepSeek-R1 differential error: {e}"}
-
-class VLLMBackend(LLMBackend):
+class DeepSeekR1Backend(OpenAICompatBackend):
     def __init__(self, base_url: str = "http://localhost:8000/v1", model: str = "deepseek-ai/deepseek-r1-distill-qwen-32b", timeout: float = 120.0):
-        self.base_url = base_url
-        self.model = model
-        try:
-            import openai
-            self.client = openai.AsyncOpenAI(base_url=base_url, api_key="not-needed", timeout=timeout)
-        except ImportError:
-            self.client = None
+        super().__init__(base_url=base_url, model=model, timeout=timeout)
+
+    @property
+    def backend_type(self) -> str:
+        return "deepseek_r1"
+
+
+class VLLMBackend(OpenAICompatBackend):
+    def __init__(self, base_url: str = "http://localhost:8000/v1", model: str = "deepseek-ai/deepseek-r1-distill-qwen-32b", timeout: float = 120.0):
+        super().__init__(base_url=base_url, model=model, timeout=timeout)
 
     @property
     def backend_type(self) -> str:
         return "vllm"
-
-    async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
-            return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
-        from core.reasoning_extractor import extract_reasoning_trace
-        prompt = self._build_prompt(patient_note, context)
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=4096,
-            )
-            raw = response.choices[0].message.content or ""
-            reasoning, triplets = extract_reasoning_trace(raw)
-            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
-        except Exception as e:
-            return {"triplets": [], "reasoning": f"vLLM error: {e}", "dag_plan": None}
-
-    async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
-            return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
-        from core.reasoning_extractor import extract_reasoning_trace, validate_reasoning_coherence
-        prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=4096,
-            )
-            raw = response.choices[0].message.content or ""
-            reasoning, triplets = extract_reasoning_trace(raw)
-            coherent = validate_reasoning_coherence(reasoning, prior_reasoning, violations)
-            if not coherent:
-                reasoning += " [WARNING: reasoning may not fully address prior violations]"
-            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
-        except Exception as e:
-            return {"triplets": [], "reasoning": f"vLLM correction error: {e}", "dag_plan": None}
-
-    async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
-            return {"symptoms": []}
-        prompt = f"""<think>Identify the key medical symptoms and findings in this patient note.</think>
-Patient note: {patient_note}
-Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1024,
-            )
-            raw = response.choices[0].message.content or ""
-            from core.reasoning_extractor import extract_reasoning_trace
-            _, triplets = extract_reasoning_trace(raw)
-            symptoms = triplets if isinstance(triplets, list) else []
-            return {"symptoms": symptoms}
-        except Exception as e:
-            return {"symptoms": []}
-
-    async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
-        if self.client is None:
-            return {"triplets": [], "reasoning": "OpenAI client not installed"}
-        prompt = f"""<think>Given these symptoms and their known ontology mappings, produce a ranked differential diagnosis.</think>
-Symptoms: {json.dumps(symptoms)}
-Known ontology mappings: {json.dumps(ontology_mappings)}
-Patient context: {json.dumps(patient_context or {})}
-Output JSON array: [{{"head": "Symptom", "relation": "INDICATES", "tail": "Condition", "confidence": 0.9}}]"""
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=2048,
-            )
-            raw = response.choices[0].message.content or ""
-            from core.reasoning_extractor import extract_reasoning_trace
-            reasoning, triplets = extract_reasoning_trace(raw)
-            return {"triplets": triplets, "reasoning": reasoning}
-        except Exception as e:
-            return {"triplets": [], "reasoning": f"vLLM differential error: {e}"}
-
-    def _build_prompt(self, patient_note: str, context: Optional[Dict]) -> str:
-        ctx = f"Context: {json.dumps(context)}\n" if context else ""
-        return f"""You are a clinical reasoning engine. Think step by step inside <think> tags, then output JSON.
-{ctx}Patient note: {patient_note}
-Step 1: Identify key symptoms and entities.
-Step 2: Map to known diagnostic pathways.
-Step 3: Assess confidence.
-Output JSON array: [{{"head": "...", "relation": "INDICATES", "tail": "...", "confidence": 0.9}}]"""
-
-    def _build_correction_prompt(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict]) -> str:
-        return f"""Previous reasoning: {prior_reasoning}
-The ontology validator rejected these violations: {json.dumps(violations)}
-Patient note: {patient_note}
-Think carefully inside <think> tags about why each violation occurred and how to fix it. Then output corrected JSON array."""
 
 class SemanticRouter:
     def __init__(self, config: Optional[Dict] = None):

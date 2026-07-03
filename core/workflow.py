@@ -8,42 +8,28 @@ import logging
 import time
 import json
 import asyncio
-import nest_asyncio
 import re
-
-nest_asyncio.apply()
 
 logger = logging.getLogger(__name__)
 
 
 class GraphState(TypedDict):
-    # Input (immutable after ingest)
     patient_note: str
     patient_context: Dict
-
-    # Step 0b: Hybrid RAG retrieval context
     retrieval_context: str
-
-    # Step A: LLM-extracted symptoms
     extracted_symptoms: List[Dict]
-
-    # Step B: Symbolic ontology mapping (no LLM)
     ontology_mappings: Dict[str, List[Dict]]
-
-    # Step C: LLM-assessed differential
     proposed_path: List[Dict]
-
-    # Step D: Safety verification (OPA + symbolic rules)
     safety_result: Dict
-
-    # Output
     validation_result: Dict
     reasoning_trace: str
     final_output: str
-    status: Literal["valid", "escalated", "error"]
+    status: Literal["valid", "corrected", "escalated", "error"]
     audit_log: List[Dict]
     iteration_count: int
     backend_key: str
+    violations: List[Dict]
+    prior_reasoning: str
 
 
 class SpeculativeGraphRAG:
@@ -73,6 +59,7 @@ class SpeculativeGraphRAG:
         workflow.add_node("map_to_ontology", self._map_to_ontology)
         workflow.add_node("assess_differential", self._assess_differential)
         workflow.add_node("verify_safety", self._verify_safety)
+        workflow.add_node("correct_differential", self._correct_differential)
         workflow.add_node("synthesize", self._synthesize)
         workflow.add_node("escalate", self._escalate)
         workflow.set_entry_point("ingest")
@@ -84,7 +71,16 @@ class SpeculativeGraphRAG:
         workflow.add_conditional_edges(
             "verify_safety",
             self._route,
-            {"synthesize": "synthesize", "escalate": "escalate"},
+            {
+                "correct_differential": "correct_differential",
+                "synthesize": "synthesize",
+                "escalate": "escalate",
+            },
+        )
+        workflow.add_conditional_edges(
+            "correct_differential",
+            self._route_after_correction,
+            {"assess_differential": "assess_differential", "escalate": "escalate"},
         )
         workflow.add_edge("synthesize", END)
         workflow.add_edge("escalate", END)
@@ -110,7 +106,10 @@ class SpeculativeGraphRAG:
         if gender_match:
             g = gender_match.group(1).lower()
             ctx["gender"] = "male" if g in ("male", "man") else "female"
-        meds_match = re.findall(r'\b(Warfarin|Aspirin|Metformin|Insulin|Furosemide|Lisinopril|Atorvastatin)\b', note, re.IGNORECASE)
+        meds_match = re.findall(
+            r'\b(Warfarin|Aspirin|Metformin|Insulin|Furosemide|Lisinopril|Atorvastatin)\b',
+            note, re.IGNORECASE,
+        )
         if meds_match:
             ctx["medications"] = list(set(m.title() for m in meds_match))
         self._log(state, "ingest", f"ctx={ctx}")
@@ -157,7 +156,26 @@ class SpeculativeGraphRAG:
         triplets = result.get("triplets", [])
         reasoning = result.get("reasoning", "")
         self._log(state, "assess_differential", f"proposed {len(triplets)} differential edges")
-        return {"proposed_path": triplets, "reasoning_trace": reasoning}
+        return {"proposed_path": triplets, "reasoning_trace": reasoning, "prior_reasoning": reasoning}
+
+    def _correct_differential(self, state: GraphState):
+        violations = state.get("safety_result", {}).get("violations", [])
+        prior = state.get("reasoning_trace", "")
+        result = asyncio.get_event_loop().run_until_complete(
+            self.llm.regenerate_with_feedback(
+                state["patient_note"], violations, prior, state.get("patient_context")
+            )
+        )
+        triplets = result.get("triplets", [])
+        reasoning = result.get("reasoning", "")
+        iteration = state.get("iteration_count", 1) + 1
+        self._log(state, "correct_differential", f"corrected: {len(triplets)} edges (attempt {iteration})")
+        return {
+            "proposed_path": triplets,
+            "reasoning_trace": reasoning,
+            "iteration_count": iteration,
+            "violations": violations,
+        }
 
     def _verify_safety(self, state: GraphState):
         path = state.get("proposed_path", [])
@@ -197,12 +215,22 @@ class SpeculativeGraphRAG:
             "confidence_decay": decay,
         }
         self._log(state, "verify_safety", f"safe={merged_valid} violations={len(merged_violations)}")
-        return {"safety_result": safety_result, "validation_result": validation_result}
+        return {"safety_result": safety_result, "validation_result": validation_result, "violations": merged_violations}
 
-    def _route(self, state: GraphState) -> Literal["synthesize", "escalate"]:
-        if state.get("safety_result", {}).get("is_safe", False):
+    def _route(self, state: GraphState) -> Literal["correct_differential", "synthesize", "escalate"]:
+        is_safe = state.get("safety_result", {}).get("is_safe", False)
+        iteration = state.get("iteration_count", 1)
+        if is_safe:
             return "synthesize"
+        if iteration < self.max_iterations:
+            return "correct_differential"
         return "escalate"
+
+    def _route_after_correction(self, state: GraphState) -> Literal["assess_differential", "escalate"]:
+        iteration = state.get("iteration_count", 1)
+        if iteration >= self.max_iterations:
+            return "escalate"
+        return "assess_differential"
 
     def _synthesize(self, state: GraphState):
         path = state.get("proposed_path", [])
@@ -233,11 +261,9 @@ class SpeculativeGraphRAG:
         }
 
     def _escalate(self, state: GraphState):
-        existing_status = state.get("status", "")
-        if existing_status == "escalated":
+        if state.get("status") == "escalated":
             return state
-
-        violations = state.get("safety_result", {}).get("violations", [])
+        violations = state.get("violations", state.get("safety_result", {}).get("violations", []))
         reason = f"Escalated after {state['iteration_count']} attempt(s). Violations: {len(violations)}"
         self._log(state, "escalate", reason)
         return {
@@ -246,6 +272,11 @@ class SpeculativeGraphRAG:
         }
 
     def run(self, patient_note: str, patient_context: Optional[Dict] = None, backend_key: Optional[str] = None) -> GraphState:
+        if backend_key and self.router:
+            routed = asyncio.get_event_loop().run_until_complete(
+                self.router.route(patient_note)
+            )
+            backend_key = routed
         initial_state: GraphState = {
             "patient_note": patient_note,
             "patient_context": patient_context or {},
@@ -261,5 +292,7 @@ class SpeculativeGraphRAG:
             "audit_log": [],
             "iteration_count": 0,
             "backend_key": backend_key or "",
+            "violations": [],
+            "prior_reasoning": "",
         }
-        return self.workflow.invoke(initial_state, config={"recursion_limit": 10})
+        return self.workflow.invoke(initial_state, config={"recursion_limit": 20})

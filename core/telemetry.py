@@ -41,8 +41,10 @@ Return valid JSON only: {{"factual_accuracy": float, "tone": float, "logic": flo
 Output:
 {text[:2000]}"""
         try:
-            resp = await llm_backend._call_llm(prompt, system="You are a clinical quality evaluator. Return JSON.")
-            match = re.search(r'\{.*\}', resp, re.DOTALL)
+            resp = await llm_backend.generate_path(prompt)
+            match = re.search(r'\{.*\}', resp.get("reasoning", ""), re.DOTALL)
+            if not match:
+                match = re.search(r'\{.*\}', resp.get("triplets", str(resp)), re.DOTALL)
             if match:
                 scores = json.loads(match.group())
             return {**scores, "status": "ok"}

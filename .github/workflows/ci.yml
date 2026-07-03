@@ -55,17 +55,6 @@ jobs:
           --health-retries 5
           --health-start-period 5s
 
-      opa:
-        image: openpolicyagent/opa:latest
-        ports:
-          - 8181:8181
-        options: >-
-          --health-cmd "curl -sf http://localhost:8181/health || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 10s
-
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +64,27 @@ jobs:
           cache: pip
 
       - run: pip install -r requirements.txt
+
+      - name: Start OPA (after checkout to mount policy file)
+        run: |
+          docker run -d --name opa \
+            -p 8181:8181 \
+            -v ${{ github.workspace }}/infra/opa/policies:/policies \
+            --health-cmd "curl -sf http://localhost:8181/health || exit 1" \
+            --health-interval 5s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            --health-start-period 10s \
+            openpolicyagent/opa:latest \
+            run --server --addr=0.0.0.0:8181 /policies
+
+      - name: Wait for OPA
+        run: |
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8181/health && echo "OPA ready" && break
+            echo "Waiting for OPA... attempt $i"
+            sleep 3
+          done
 
       - name: Seed Neo4j mock ontology
         run: |
@@ -86,8 +96,5 @@ jobs:
           print('Ontology seeded')
           "
 
-      - name: Run full test suite
-        run: pytest tests/ -v --tb=short --ignore=tests/test_hybrid_rag.py
-
-      - name: Run hybrid RAG tests (if infrastructure available)
-        run: pytest tests/test_hybrid_rag.py -v --tb=short || echo "Hybrid RAG tests skipped (stub)"
+      - name: Run test suite
+        run: pytest tests/ -v --tb=short -x

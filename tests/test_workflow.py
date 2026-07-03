@@ -37,7 +37,7 @@ def test_valid_path_1_iteration(rag):
 def test_invalid_path_escalation(rag):
     result = rag.run("Patient has unknown rare symptom XYZ123")
     assert result["status"] == "escalated"
-    assert result["iteration_count"] == 1
+    assert result["iteration_count"] == 3
 
 
 def test_escalate_on_nonsensical_input(rag):
