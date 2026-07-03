@@ -17,3 +17,4 @@ neo4j_logs/
 htmlcov/
 .DS_Store
 Thumbs.db
+*.db

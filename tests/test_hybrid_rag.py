@@ -1,9 +1,19 @@
 import pytest
+from core.retrieval import HybridRetriever
 
-@pytest.mark.skip(reason="Qdrant/LlamaIndex integration not yet fully implemented")
-def test_vector_retrieval():
-    pass
 
-@pytest.mark.skip(reason="Neo4j traversal tests require full graph RAG implementation")
-def test_graph_traversal():
-    pass
+@pytest.mark.asyncio
+async def test_vector_retrieval_returns_structure():
+    retriever = HybridRetriever()
+    result = await retriever._vector_search("dyspnea", top_k=3)
+    assert isinstance(result, list)
+
+
+@pytest.mark.asyncio
+async def test_graph_traversal_returns_edges():
+    retriever = HybridRetriever()
+    result = await retriever._graph_search("dyspnea")
+    assert isinstance(result, list)
+    if result:
+        assert "head" in result[0]
+        assert "tail" in result[0]

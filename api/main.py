@@ -7,18 +7,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.schemas import SpeculateRequest, SpeculateResponse, ReasoningTraceResponse, HealthResponse
 from api.dependencies import get_neo4j_verifier, get_symbolic_verifier, get_opa_client, get_llm_backend
-from api.middleware import RequestIDMiddleware
+from api.middleware import RequestIDMiddleware, APIKeyMiddleware, RateLimitMiddleware
 from core.workflow import SpeculativeGraphRAG
 from core.llm_backend import MockLLMBackend
 
 logger = logging.getLogger(__name__)
 
-# In-memory trace store for reasoning traces (ephemeral, no PHI persistence)
 _trace_store: dict = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     verifier = get_neo4j_verifier()
     try:
         verifier.seed_mock_ontology()
@@ -26,18 +24,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Startup: Neo4j seed failed (may already be seeded): {e}")
     yield
-    # Shutdown
     get_neo4j_verifier().close()
     logger.info("Shutdown: Neo4j connection closed.")
 
 app = FastAPI(
     title="Speculative Clinical GraphRAG",
     description="Type 2→6 Neuro-Symbolic Hybrid Clinical Decision Support",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(APIKeyMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,9 +56,13 @@ async def health():
     neo_ok = False
     qdrant_ok = False
     opa_ok = False
+    redis_ok = False
     try:
         from neo4j import GraphDatabase
-        d = GraphDatabase.driver(os.getenv("NEO4J_URI", "bolt://localhost:7687"), auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "speculative123")))
+        d = GraphDatabase.driver(
+            os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "speculative123")),
+        )
         d.verify_connectivity()
         d.close()
         neo_ok = True
@@ -67,14 +70,26 @@ async def health():
         pass
     try:
         import httpx
-        r = httpx.get(os.getenv("QDRANT_HOST", "http://localhost:6333").rstrip("/") + "/", timeout=2.0)
+        r = httpx.get(
+            os.getenv("QDRANT_HOST", "http://localhost:6333").rstrip("/") + "/", timeout=2.0
+        )
         qdrant_ok = r.status_code < 500
     except Exception:
         pass
     try:
         import httpx
-        r = httpx.get(os.getenv("OPA_URL", "http://localhost:8181").rstrip("/") + "/health", timeout=2.0)
+        r = httpx.get(
+            os.getenv("OPA_URL", "http://localhost:8181").rstrip("/") + "/health", timeout=2.0
+        )
         opa_ok = r.status_code < 500
+    except Exception:
+        pass
+    try:
+        import redis.asyncio as redis
+        r = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+        await r.ping()
+        await r.aclose()
+        redis_ok = True
     except Exception:
         pass
     return HealthResponse(
@@ -83,6 +98,7 @@ async def health():
         neo4j_connected=neo_ok,
         qdrant_connected=qdrant_ok,
         opa_connected=opa_ok,
+        version="0.3.0",
     )
 
 @app.post("/v1/speculate", response_model=SpeculateResponse)
@@ -93,7 +109,6 @@ async def speculate(request: SpeculateRequest):
             patient_context=request.patient_context,
             backend_key=request.preferred_backend,
         )
-        # Store trace for /v1/reasoning_trace retrieval
         trace_id = os.urandom(8).hex()
         _trace_store[trace_id] = {
             "trace_id": trace_id,

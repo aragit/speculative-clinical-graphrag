@@ -32,4 +32,5 @@ class HealthResponse(BaseModel):
     neo4j_connected: bool
     qdrant_connected: bool
     opa_connected: bool
-    version: str = "0.2.0"
+    redis_connected: bool = False
+    version: str = "0.3.0"

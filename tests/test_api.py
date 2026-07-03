@@ -11,7 +11,7 @@ def test_health_probes():
     assert "neo4j_connected" in data
     assert "qdrant_connected" in data
     assert "opa_connected" in data
-    assert data["version"] == "0.2.0"
+    assert data["version"] == "0.3.0"
 
 def test_speculate_endpoint():
     response = client.post("/v1/speculate", json={"patient_note": "Patient has dyspnea"})
@@ -23,8 +23,6 @@ def test_speculate_endpoint():
 def test_reasoning_trace_endpoint():
     r1 = client.post("/v1/speculate", json={"patient_note": "Patient has chest pain"})
     assert r1.status_code == 200
-    # We cannot easily get trace_id from response; test structure only
-    # In real integration, trace_id would be returned
 
 def test_speculate_escalation():
     response = client.post("/v1/speculate", json={"patient_note": "nonsense text that matches nothing"})
