@@ -1,14 +1,22 @@
 <h1 align="center">Speculative Clinical GraphRAG</h1>
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12-blue" alt="Python">
-  <img src="https://img.shields.io/badge/FastAPI-009688" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Neo4j-008CC1" alt="Neo4j">
-  <img src="https://img.shields.io/badge/LangGraph-1C3C3C" alt="LangGraph">
-  <img src="https://img.shields.io/badge/Qdrant-EB5245" alt="Qdrant">
-  <img src="https://img.shields.io/badge/OPA-7A5CF7" alt="OPA">
-  <img src="https://img.shields.io/badge/vLLM-00A86B" alt="vLLM">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
-  <img src="https://img.shields.io/badge/tests-53%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/Python-3.12-blue" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/FastAPI-0.110-009688" alt="FastAPI 0.110">
+  <img src="https://img.shields.io/badge/Pydantic-2.6-E92063" alt="Pydantic 2.6">
+  <img src="https://img.shields.io/badge/Neo4j-5-008CC1" alt="Neo4j 5">
+  <img src="https://img.shields.io/badge/LangGraph-0.0.40-1C3C3C" alt="LangGraph 0.0.40">
+  <img src="https://img.shields.io/badge/Qdrant-1.7-EB5245" alt="Qdrant 1.7">
+  <img src="https://img.shields.io/badge/Redis-7-DC382D" alt="Redis 7">
+  <img src="https://img.shields.io/badge/OPA-0.68-7A5CF7" alt="OPA 0.68">
+  <img src="https://img.shields.io/badge/vLLM-0.6-00A86B" alt="vLLM 0.6">
+  <img src="https://img.shields.io/badge/sentence--transformers-2.2-FF6F00" alt="sentence-transformers 2.2">
+  <img src="https://img.shields.io/badge/OpenTelemetry-1.22-4A154B" alt="OpenTelemetry 1.22">
+  <img src="https://img.shields.io/badge/OpenAI-1.12-412991" alt="OpenAI 1.12">
+  <img src="https://img.shields.io/badge/Docker-27.0-2496ED" alt="Docker 27.0">
+  <img src="https://img.shields.io/badge/GitHub_Actions-2024-2088FF" alt="GitHub Actions">
+  <img src="https://img.shields.io/badge/Jaeger-1.60-60D" alt="Jaeger 1.60">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
+  <img src="https://img.shields.io/badge/tests-53_passing-2EA44F" alt="53 tests passing">
 </p>
 
 <p align="center">
