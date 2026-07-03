@@ -343,18 +343,7 @@ speculative-clinical-graphrag/
 
 ### `core/workflow.py` — Type 2 Pipeline
 
-The LangGraph `StateGraph` has 9 nodes with a correction loop:
-
-```
-ingest → retrieve_context → extract_symptoms → map_to_ontology → assess_differential → verify_safety
-                                                                                              |
-                                                      ┌─────────────────────────────────────┤
-                                                      ▼                                     ▼
-                                              correct_differential                     [synthesize | escalate]
-                                                      │
-                                                      ▼
-                                              assess_differential ←── (loop back)
-```
+The LangGraph `StateGraph` executes 9 typed nodes as a linear pipeline with a single correction loop. Nodes 1–6 run sequentially: **ingest** (extract age/gender/meds from note), **retrieve_context** (hybrid vector + graph search), **extract_symptoms** (LLM subroutine), **map_to_ontology** (symbolic lookup, no LLM), **assess_differential** (LLM proposes diagnostic triplets), **verify_safety** (3-layer check: Neo4j + symbolic rules + OPA). If verification passes, the graph routes to **synthesize** (format validated output). If it fails and `iteration_count < max_iterations` (default 3), it routes to **correct_differential**, which feeds violations + prior reasoning back to the LLM, then loops back to **assess_differential** for re-evaluation. If max iterations are exceeded, it routes to **escalate** (human review with full trace).
 
 `GraphState` typed working memory:
 - `patient_note`, `patient_context` — input
