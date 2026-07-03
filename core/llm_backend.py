@@ -1,129 +1,311 @@
+
 from abc import ABC, abstractmethod
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
+import re
 import json
 import httpx
-
+import os
+import copy
 
 class LLMBackend(ABC):
     @abstractmethod
-    def generate_path(self, patient_note: str) -> List[Dict]:
-        pass
+    async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        return {}
 
     @abstractmethod
-    def regenerate_with_feedback(
-        self, patient_note: str, violations: List[Dict]
-    ) -> List[Dict]:
-        pass
+    async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
+        return {}
 
+    @property
+    @abstractmethod
+    def backend_type(self) -> str:
+        return ""
 
 class MockLLMBackend(LLMBackend):
-    MOCK_KNOWLEDGE = {
+    _MOCK_KNOWLEDGE_TEMPLATE = {
         "dyspnea": [
             {"head": "Dyspnea", "relation": "INDICATES", "tail": "Heart Failure", "confidence": 0.92},
             {"head": "Dyspnea", "relation": "INDICATES", "tail": "COPD", "confidence": 0.78},
+            {"head": "Dyspnea", "relation": "INDICATES", "tail": "Pneumonia", "confidence": 0.74},
+            {"head": "Dyspnea", "relation": "INDICATES", "tail": "Asthma", "confidence": 0.70},
+            {"head": "Dyspnea", "relation": "INDICATES", "tail": "Pulmonary Embolism", "confidence": 0.65},
         ],
         "orthopnea": [
             {"head": "Orthopnea", "relation": "INDICATES", "tail": "Heart Failure", "confidence": 0.95},
+            {"head": "Orthopnea", "relation": "INDICATES", "tail": "Pericardial Effusion", "confidence": 0.60},
         ],
         "chest pain": [
             {"head": "Chest Pain", "relation": "INDICATES", "tail": "Myocardial Infarction", "confidence": 0.88},
+            {"head": "Chest Pain", "relation": "INDICATES", "tail": "Angina", "confidence": 0.82},
+            {"head": "Chest Pain", "relation": "INDICATES", "tail": "Pulmonary Embolism", "confidence": 0.75},
+            {"head": "Chest Pain", "relation": "INDICATES", "tail": "Pericarditis", "confidence": 0.68},
+            {"head": "Chest Pain", "relation": "INDICATES", "tail": "Aortic Dissection", "confidence": 0.55},
+        ],
+        "fatigue": [
+            {"head": "Fatigue", "relation": "INDICATES", "tail": "Anemia", "confidence": 0.72},
+            {"head": "Fatigue", "relation": "INDICATES", "tail": "Heart Failure", "confidence": 0.68},
+            {"head": "Fatigue", "relation": "INDICATES", "tail": "Hypothyroidism", "confidence": 0.65},
+            {"head": "Fatigue", "relation": "INDICATES", "tail": "Depression", "confidence": 0.60},
+        ],
+        "edema": [
+            {"head": "Edema", "relation": "INDICATES", "tail": "Heart Failure", "confidence": 0.85},
+            {"head": "Edema", "relation": "INDICATES", "tail": "Chronic Kidney Disease", "confidence": 0.70},
+            {"head": "Edema", "relation": "INDICATES", "tail": "Cirrhosis", "confidence": 0.65},
+            {"head": "Edema", "relation": "INDICATES", "tail": "Nephrotic Syndrome", "confidence": 0.62},
+        ],
+        "palpitations": [
+            {"head": "Palpitations", "relation": "INDICATES", "tail": "Atrial Fibrillation", "confidence": 0.80},
+            {"head": "Palpitations", "relation": "INDICATES", "tail": "Anxiety", "confidence": 0.75},
+            {"head": "Palpitations", "relation": "INDICATES", "tail": "Ventricular Tachycardia", "confidence": 0.60},
+        ],
+        "cough": [
+            {"head": "Cough", "relation": "INDICATES", "tail": "COPD", "confidence": 0.78},
+            {"head": "Cough", "relation": "INDICATES", "tail": "Pneumonia", "confidence": 0.76},
+            {"head": "Cough", "relation": "INDICATES", "tail": "Asthma", "confidence": 0.72},
+            {"head": "Cough", "relation": "INDICATES", "tail": "Lung Cancer", "confidence": 0.50},
+        ],
+        "fever": [
+            {"head": "Fever", "relation": "INDICATES", "tail": "Sepsis", "confidence": 0.80},
+            {"head": "Fever", "relation": "INDICATES", "tail": "Pneumonia", "confidence": 0.75},
+            {"head": "Fever", "relation": "INDICATES", "tail": "Meningitis", "confidence": 0.65},
+            {"head": "Fever", "relation": "INDICATES", "tail": "Malaria", "confidence": 0.55},
+        ],
+        "jaundice": [
+            {"head": "Jaundice", "relation": "INDICATES", "tail": "Hepatitis", "confidence": 0.82},
+            {"head": "Jaundice", "relation": "INDICATES", "tail": "Cirrhosis", "confidence": 0.78},
+            {"head": "Jaundice", "relation": "INDICATES", "tail": "Biliary Obstruction", "confidence": 0.75},
+            {"head": "Jaundice", "relation": "INDICATES", "tail": "Hemolysis", "confidence": 0.60},
+        ],
+        "hematuria": [
+            {"head": "Hematuria", "relation": "INDICATES", "tail": "Bladder Cancer", "confidence": 0.70},
+            {"head": "Hematuria", "relation": "INDICATES", "tail": "Kidney Stones", "confidence": 0.75},
+            {"head": "Hematuria", "relation": "INDICATES", "tail": "UTI", "confidence": 0.72},
+            {"head": "Hematuria", "relation": "INDICATES", "tail": "Glomerulonephritis", "confidence": 0.65},
+        ],
+        "syncope": [
+            {"head": "Syncope", "relation": "INDICATES", "tail": "Arrhythmia", "confidence": 0.78},
+            {"head": "Syncope", "relation": "INDICATES", "tail": "Orthostatic Hypotension", "confidence": 0.70},
+            {"head": "Syncope", "relation": "INDICATES", "tail": "Pulmonary Embolism", "confidence": 0.55},
+        ],
+        "headache": [
+            {"head": "Headache", "relation": "INDICATES", "tail": "Migraine", "confidence": 0.80},
+            {"head": "Headache", "relation": "INDICATES", "tail": "Tension Headache", "confidence": 0.75},
+            {"head": "Headache", "relation": "INDICATES", "tail": "Subarachnoid Hemorrhage", "confidence": 0.45},
+            {"head": "Headache", "relation": "INDICATES", "tail": "Meningitis", "confidence": 0.55},
+        ],
+        "warfarin": [
+            {"head": "Warfarin", "relation": "CONTRAINDICATES", "tail": "Aspirin", "confidence": 0.95},
+            {"head": "Warfarin", "relation": "CONTRAINDICATES", "tail": "Ibuprofen", "confidence": 0.92},
+        ],
+        "metformin": [
+            {"head": "Metformin", "relation": "CONTRAINDICATES", "tail": "Severe Renal Impairment", "confidence": 0.90},
+        ],
+        "aspirin": [
+            {"head": "Aspirin", "relation": "TREATS", "tail": "Myocardial Infarction", "confidence": 0.88},
+            {"head": "Aspirin", "relation": "TREATS", "tail": "Angina", "confidence": 0.82},
+        ],
+        "furosemide": [
+            {"head": "Furosemide", "relation": "TREATS", "tail": "Heart Failure", "confidence": 0.90},
+            {"head": "Furosemide", "relation": "TREATS", "tail": "Edema", "confidence": 0.88},
+        ],
+        "insulin": [
+            {"head": "Insulin", "relation": "TREATS", "tail": "Diabetes Mellitus", "confidence": 0.95},
+            {"head": "Insulin", "relation": "TREATS", "tail": "Diabetic Ketoacidosis", "confidence": 0.92},
+        ],
+        "nausea": [
+            {"head": "Nausea", "relation": "INDICATES", "tail": "Gastroenteritis", "confidence": 0.70},
+            {"head": "Nausea", "relation": "INDICATES", "tail": "Myocardial Infarction", "confidence": 0.55},
+            {"head": "Nausea", "relation": "INDICATES", "tail": "Migraine", "confidence": 0.60},
+        ],
+        "wheeze": [
+            {"head": "Wheeze", "relation": "INDICATES", "tail": "Asthma", "confidence": 0.85},
+            {"head": "Wheeze", "relation": "INDICATES", "tail": "COPD", "confidence": 0.78},
+            {"head": "Wheeze", "relation": "INDICATES", "tail": "Anaphylaxis", "confidence": 0.65},
+        ],
+        "confusion": [
+            {"head": "Confusion", "relation": "INDICATES", "tail": "Delirium", "confidence": 0.80},
+            {"head": "Confusion", "relation": "INDICATES", "tail": "Stroke", "confidence": 0.70},
+            {"head": "Confusion", "relation": "INDICATES", "tail": "Hypoglycemia", "confidence": 0.75},
+            {"head": "Confusion", "relation": "INDICATES", "tail": "Uremia", "confidence": 0.65},
         ],
     }
 
-    def generate_path(self, patient_note: str) -> List[Dict]:
-        note_lower = patient_note.lower()
-        triplets = []
-        for keyword, paths in self.MOCK_KNOWLEDGE.items():
-            if keyword in note_lower:
-                triplets.extend(paths)
-        if not triplets:
-            triplets = [
-                {"head": "Unknown Symptom", "relation": "INDICATES", "tail": "Unknown Condition", "confidence": 0.5}
-            ]
-        return triplets
+    def __init__(self, seed: int = 42):
+        import copy
+        self.seed = seed
+        self.MOCK_KNOWLEDGE = copy.deepcopy(self._MOCK_KNOWLEDGE_TEMPLATE)
 
-    def regenerate_with_feedback(
-        self, patient_note: str, violations: List[Dict]
-    ) -> List[Dict]:
-        # Try partial matches first
+    @property
+    def backend_type(self) -> str:
+        return "mock"
+
+    async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
         note_lower = patient_note.lower()
         triplets = []
         for keyword, paths in self.MOCK_KNOWLEDGE.items():
             if keyword in note_lower:
-                triplets.extend(paths)
-        
+                triplets.extend(copy.deepcopy(paths))
+        if not triplets:
+            triplets = [{"head": "Unknown Symptom", "relation": "INDICATES", "tail": "Unknown Condition", "confidence": 0.5}]
+        reasoning = "MockLLM deterministic extraction from keywords"
+        return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+
+    async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
+        note_lower = patient_note.lower()
+        triplets = []
+        for keyword, paths in self.MOCK_KNOWLEDGE.items():
+            if keyword in note_lower:
+                triplets.extend(copy.deepcopy(paths))
         if triplets:
             for t in triplets:
-                t["confidence"] = max(t["confidence"] - 0.1, 0.5)
+                t["confidence"] = max(t.get("confidence", 0.8) - 0.1, 0.5)
                 t["corrected"] = True
-            return triplets
-        
-        # No matches - return empty to force escalation
-        return []
-
+            reasoning = "MockLLM correction attempt"
+        else:
+            triplets = []
+            reasoning = "MockLLM: no valid matches after correction, forcing escalation."
+        return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
 
 class OllamaBackend(LLMBackend):
-    def __init__(
-        self,
-        model: str = "gemma2:2b",
-        host: str = "http://localhost:11434",
-        timeout: float = 60.0,
-    ):
+    def __init__(self, model: str = "gemma2:2b", host: str = "http://localhost:11434", timeout: float = 60.0):
         self.model = model
         self.host = host
         self.timeout = timeout
         self.client = httpx.AsyncClient(timeout=timeout)
 
-    async def generate_path(self, patient_note: str) -> List[Dict]:
-        prompt = self._build_prompt(patient_note)
-        response = await self.client.post(
-            f"{self.host}/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        return json.loads(data["response"])
+    @property
+    def backend_type(self) -> str:
+        return "ollama"
 
-    async def regenerate_with_feedback(
-        self, patient_note: str, violations: List[Dict]
-    ) -> List[Dict]:
-        prompt = self._build_correction_prompt(patient_note, violations)
-        response = await self.client.post(
-            f"{self.host}/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        return json.loads(data["response"])
+    async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        prompt = self._build_prompt(patient_note, context)
+        try:
+            response = await self.client.post(
+                f"{self.host}/api/generate",
+                json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            parsed = json.loads(data["response"])
+            if isinstance(parsed, list):
+                triplets = parsed
+            elif isinstance(parsed, dict) and "triplets" in parsed:
+                triplets = parsed["triplets"]
+            else:
+                triplets = []
+            return {"triplets": triplets, "reasoning": f"Ollama ({self.model}) generation", "dag_plan": None}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"Ollama error: {e}", "dag_plan": None}
 
-    def _build_prompt(self, patient_note: str) -> str:
-        return f"""You are a clinical reasoning engine. Given a patient note, extract structured diagnostic pathways as JSON.
+    async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
+        prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
+        try:
+            response = await self.client.post(
+                f"{self.host}/api/generate",
+                json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            parsed = json.loads(data["response"])
+            triplets = parsed if isinstance(parsed, list) else parsed.get("triplets", [])
+            return {"triplets": triplets, "reasoning": f"Ollama correction. Prior: {prior_reasoning[:50]}...", "dag_plan": None}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"Ollama correction error: {e}", "dag_plan": None}
 
-Patient note: {patient_note}
+    def _build_prompt(self, patient_note: str, context: Optional[Dict]) -> str:
+        ctx = f"Context: {json.dumps(context)}\n" if context else ""
+        return f"""You are a clinical reasoning engine. Extract structured diagnostic pathways as JSON.
+{ctx}Patient note: {patient_note}
+Output a JSON array: [{"head": "...", "relation": "INDICATES", "tail": "...", "confidence": 0.9}]"""
 
-Output a JSON array of objects with keys: head, relation, tail, confidence.
-Example: [{{"head": "Dyspnea", "relation": "INDICATES", "tail": "Heart Failure", "confidence": 0.92}}]
-"""
-
-    def _build_correction_prompt(
-        self, patient_note: str, violations: List[Dict]
-    ) -> str:
-        return f"""The following diagnostic pathway was rejected by the medical taxonomy validator:
-
+    def _build_correction_prompt(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict]) -> str:
+        return f"""The following pathway was rejected by the medical ontology validator.
 Violations: {json.dumps(violations)}
-
+Prior reasoning: {prior_reasoning}
 Patient note: {patient_note}
+Regenerate respecting constraints. Output JSON array only."""
 
-Please regenerate a corrected pathway that respects the taxonomy constraints.
-Output a JSON array of objects with keys: head, relation, tail, confidence.
-"""
+class DeepSeekR1Backend(LLMBackend):
+    def __init__(self, base_url: str = "http://localhost:8000/v1", model: str = "deepseek-ai/deepseek-r1-distill-qwen-32b", timeout: float = 120.0):
+        self.base_url = base_url
+        self.model = model
+        self.timeout = timeout
+        try:
+            import openai
+            self.client = openai.AsyncOpenAI(base_url=base_url, api_key="not-needed", timeout=timeout)
+        except ImportError:
+            self.client = None
+
+    @property
+    def backend_type(self) -> str:
+        return "deepseek_r1"
+
+    async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
+        from core.reasoning_extractor import extract_reasoning_trace
+        prompt = self._build_prompt(patient_note, context)
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            raw = response.choices[0].message.content or ""
+            reasoning, triplets = extract_reasoning_trace(raw)
+            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"DeepSeek-R1 error: {e}", "dag_plan": None}
+
+    async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
+        if self.client is None:
+            return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
+        from core.reasoning_extractor import extract_reasoning_trace, validate_reasoning_coherence
+        prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            raw = response.choices[0].message.content or ""
+            reasoning, triplets = extract_reasoning_trace(raw)
+            coherent = validate_reasoning_coherence(reasoning, prior_reasoning, violations)
+            if not coherent:
+                reasoning += " [WARNING: reasoning may not fully address prior violations]"
+            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+        except Exception as e:
+            return {"triplets": [], "reasoning": f"DeepSeek-R1 correction error: {e}", "dag_plan": None}
+
+    def _build_prompt(self, patient_note: str, context: Optional[Dict]) -> str:
+        ctx = f"Context: {json.dumps(context)}\n" if context else ""
+        return f"""You are a clinical reasoning engine. Think step by step inside <think> tags, then output JSON.
+{ctx}Patient note: {patient_note}
+
+Step 1: Identify key symptoms and entities.
+Step 2: Map to known diagnostic pathways.
+Step 3: Assess confidence.
+
+Output JSON array: [{"head": "...", "relation": "INDICATES", "tail": "...", "confidence": 0.9}]"""
+
+    def _build_correction_prompt(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict]) -> str:
+        return f"""Previous reasoning: {prior_reasoning}
+The ontology validator rejected these violations: {json.dumps(violations)}
+Patient note: {patient_note}
+Think carefully inside <think> tags about why each violation occurred and how to fix it. Then output corrected JSON array."""
+
+class SemanticRouter:
+    def __init__(self, config: Optional[Dict] = None):
+        self.config = config or {}
+        self.simple_keywords = ["dyspnea", "chest pain", "fever", "cough", "headache", "fatigue"]
+
+    async def route(self, patient_note: str) -> str:
+        note_lower = patient_note.lower()
+        word_count = len(patient_note.split())
+        if any(k in note_lower for k in self.simple_keywords) and word_count < 30:
+            return self.config.get("simple_backend", "mock")
+        if any(phrase in note_lower for phrase in ["differential", "multiple comorbidities", "unclear diagnosis", "complex"]):
+            return "deepseek_r1"
+        return self.config.get("default_backend", "ollama")

@@ -1,17 +1,53 @@
+version: "3.8"
 services:
   neo4j:
-    image: neo4j:5.24-community
-    container_name: neo4j-speculative-rag
+    image: neo4j:5.15-community
     ports:
       - "7474:7474"
       - "7687:7687"
     environment:
       - NEO4J_AUTH=neo4j/speculative123
-      - NEO4J_PLUGINS=["apoc"]
     volumes:
       - neo4j_data:/data
-      - neo4j_logs:/logs
-
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  opa:
+    image: openpolicyagent/opa:latest
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./infra/opa/policies:/policies
+    command: ["run", "--server", "--watch", "/policies"]
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "6831:6831/udp"
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - QDRANT_HOST=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - OPA_URL=http://opa:8181
+      - JAEGER_HOST=jaeger:6831
+    depends_on:
+      - neo4j
+      - qdrant
+      - redis
+      - opa
 volumes:
   neo4j_data:
-  neo4j_logs:
+  qdrant_data:
