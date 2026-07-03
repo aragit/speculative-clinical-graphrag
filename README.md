@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/FastAPI-0.110-009688" alt="FastAPI 0.110">
   <img src="https://img.shields.io/badge/Pydantic-2.6-E92063" alt="Pydantic 2.6">
   <img src="https://img.shields.io/badge/Neo4j-5-008CC1" alt="Neo4j 5">
-  <img src="https://img.shields.io/badge/LangGraph-0.0.40-1C3C3C" alt="LangGraph 0.0.40">
+  <img src="https://img.shields.io/badge/LangGraph-1.2.7-1C3C3C" alt="LangGraph 1.2.7">
   <img src="https://img.shields.io/badge/Qdrant-1.7-EB5245" alt="Qdrant 1.7">
   <img src="https://img.shields.io/badge/Redis-7-DC382D" alt="Redis 7">
   <img src="https://img.shields.io/badge/OPA-0.68-7A5CF7" alt="OPA 0.68">
@@ -72,11 +72,11 @@ Medical LLMs hallucinate when given open-ended generative control. Even with pos
 |------|---------|--------|
 | **Pipeline** | Type 2 Symbolic[Neuro] linear workflow | ✅ |
 | **Pipeline** | Hybrid RAG (vector + graph) retrieval context | ✅ |
-| **Pipeline** | Zero-correction-loop: escalate on any failure | ✅ |
+| **Pipeline** | Correction loop: up to 3 automated iterations before escalation | ✅ |
 | **LLM** | 4 backends: MockLLM (zero-dep), Ollama (CPU), DeepSeek-R1, vLLM (GPU) | ✅ |
 | **LLM** | Bounded extract_symptoms() / assess_differential() on all backends | ✅ |
 | **LLM** | SemanticRouter for automatic backend selection | ✅ |
-| **Ontology** | 325 in-memory edges (30 symptoms, 60 conditions, 23 drugs, 10 procedures) | ✅ |
+| **Ontology** | 178 in-memory ontology triples covering 126 unique clinical concepts | ✅ |
 | **Ontology** | Symbolic lookup_edges() — no LLM, no database | ✅ |
 | **Safety** | Neo4j Cypher validation (falls back to in-memory) | ✅ |
 | **Safety** | SymbolicVerifier: drug interactions + age contraindications | ✅ |
@@ -295,7 +295,7 @@ speculative-clinical-graphrag/
 │   └── middleware.py           # RequestIDMiddleware, APIKeyMiddleware, RateLimitMiddleware
 ├── core/
 │   ├── __init__.py
-│   ├── workflow.py             # SpeculativeGraphRAG — Type 2 LangGraph state machine (8 nodes)
+│   ├── workflow.py             # SpeculativeGraphRAG — Type 2 LangGraph state machine (9 nodes)
 │   ├── llm_backend.py          # LLMBackend ABC + MockLLM, Ollama, DeepSeekR1, VLLM, SemanticRouter
 │   ├── verification_layer.py   # Neo4jVerifier, SymbolicVerifier, OPAClient, EDGES ontology
 │   ├── retrieval.py            # HybridRetriever — sentence-transformers + Qdrant + Neo4j + fusion
@@ -343,10 +343,17 @@ speculative-clinical-graphrag/
 
 ### `core/workflow.py` — Type 2 Pipeline
 
-The LangGraph `StateGraph` has 8 nodes executed linearly:
+The LangGraph `StateGraph` has 9 nodes with a correction loop:
 
 ```
-ingest → retrieve_context → extract_symptoms → map_to_ontology → assess_differential → verify_safety → [synthesize | escalate]
+ingest → retrieve_context → extract_symptoms → map_to_ontology → assess_differential → verify_safety
+                                                                                              |
+                                                      ┌─────────────────────────────────────┤
+                                                      ▼                                     ▼
+                                              correct_differential                     [synthesize | escalate]
+                                                      │
+                                                      ▼
+                                              assess_differential ←── (loop back)
 ```
 
 `GraphState` typed working memory:
@@ -482,7 +489,7 @@ pytest tests/ -v
 
 ### GitHub Actions (`.github/workflows/ci.yml`)
 
-- Service containers: Neo4j, Qdrant, Redis, OPA
+- Service containers: Neo4j, Qdrant, Redis. OPA started via `docker run` after checkout with policy volume mount.
 - Steps: checkout → pip install → seed ontology → run tests → post-results
 - Healthcheck options for all service containers
 
