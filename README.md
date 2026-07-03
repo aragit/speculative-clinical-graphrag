@@ -500,7 +500,7 @@ pytest tests/ -v
 | Phase | Deliverable | Status |
 |-------|-------------|--------|
 | **Phase 1** | Knowledge Foundation — in-memory EDGES ontology, Neo4j schema | ✅ Complete |
-| **Phase 2** | Type 2 Pipeline — LangGraph state machine with 8 nodes | ✅ Complete |
+| **Phase 2** | Type 2 Pipeline — LangGraph state machine with 9 nodes + correction loop | ✅ Complete |
 | **Phase 3** | Safety Stack — Neo4j + SymbolicVerifier + OPA | ✅ Complete |
 | **Phase 4** | Hybrid RAG — Qdrant vector search + Neo4j graph | ✅ Complete |
 | **Phase 5** | Production API — auth, rate limiting, SSE streaming | ⬜ In progress |
