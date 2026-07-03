@@ -104,7 +104,7 @@ async def health():
 @app.post("/v1/speculate", response_model=SpeculateResponse)
 async def speculate(request: SpeculateRequest):
     try:
-        result = rag.run(
+        result = await rag.run(
             patient_note=request.patient_note,
             patient_context=request.patient_context,
             backend_key=request.preferred_backend,

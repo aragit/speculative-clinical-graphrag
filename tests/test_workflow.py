@@ -1,7 +1,4 @@
 import pytest
-import nest_asyncio
-nest_asyncio.apply()
-
 from core.llm_backend import MockLLMBackend
 from core.verification_layer import Neo4jVerifier, SymbolicVerifier
 from core.workflow import SpeculativeGraphRAG
@@ -24,8 +21,9 @@ def rag():
         pass
 
 
-def test_valid_path_1_iteration(rag):
-    result = rag.run("Patient has dyspnea and orthopnea")
+@pytest.mark.asyncio
+async def test_valid_path_1_iteration(rag):
+    result = await rag.run("Patient has dyspnea and orthopnea")
     assert result["status"] == "valid"
     assert result["iteration_count"] == 1
     assert len(result["validation_result"]["valid_edges"]) > 0
@@ -34,19 +32,22 @@ def test_valid_path_1_iteration(rag):
     assert any("dyspnea" in str(k).lower() for k in result.get("ontology_mappings", {}))
 
 
-def test_invalid_path_escalation(rag):
-    result = rag.run("Patient has unknown rare symptom XYZ123")
+@pytest.mark.asyncio
+async def test_invalid_path_escalation(rag):
+    result = await rag.run("Patient has unknown rare symptom XYZ123")
     assert result["status"] == "escalated"
     assert result["iteration_count"] == 3
 
 
-def test_escalate_on_nonsensical_input(rag):
-    result = rag.run("Completely nonsensical medical text")
+@pytest.mark.asyncio
+async def test_escalate_on_nonsensical_input(rag):
+    result = await rag.run("Completely nonsensical medical text")
     assert result["status"] == "escalated"
     assert "human review" in result["final_output"].lower()
 
 
-def test_reasoning_trace_in_response(rag):
-    result = rag.run("Patient has chest pain")
+@pytest.mark.asyncio
+async def test_reasoning_trace_in_response(rag):
+    result = await rag.run("Patient has chest pain")
     assert "reasoning_trace" in result
     assert result.get("reasoning_trace") != ""

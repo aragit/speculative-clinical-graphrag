@@ -7,7 +7,6 @@ from core.retrieval import HybridRetriever
 import logging
 import time
 import json
-import asyncio
 import re
 
 logger = logging.getLogger(__name__)
@@ -96,7 +95,7 @@ class SpeculativeGraphRAG:
         state["audit_log"].append(entry)
         logger.info(f"[{node}] iter={entry['iteration']} {detail}")
 
-    def _ingest(self, state: GraphState):
+    async def _ingest(self, state: GraphState):
         note = state["patient_note"]
         ctx = dict(state.get("patient_context") or {})
         age_match = re.search(r'(\d+)\s*-?\s*year\s*-?\s*old', note, re.IGNORECASE)
@@ -115,28 +114,24 @@ class SpeculativeGraphRAG:
         self._log(state, "ingest", f"ctx={ctx}")
         return {"patient_context": ctx, "iteration_count": 1}
 
-    def _retrieve_context(self, state: GraphState):
+    async def _retrieve_context(self, state: GraphState):
         note = state["patient_note"]
-        result = asyncio.get_event_loop().run_until_complete(
-            self.retriever.retrieve(note)
-        )
+        result = await self.retriever.retrieve(note)
         ctx = result.get("merged_context", "")
         self._log(state, "retrieve_context", f"vector={len(result['vector_results'])} graph={len(result['graph_results'])}")
         return {"retrieval_context": ctx}
 
-    def _extract_symptoms(self, state: GraphState):
+    async def _extract_symptoms(self, state: GraphState):
         note = state["patient_note"]
         ctx = dict(state.get("patient_context") or {})
         if state.get("retrieval_context"):
             ctx["retrieval_context"] = state["retrieval_context"]
-        result = asyncio.get_event_loop().run_until_complete(
-            self.llm.extract_symptoms(note, ctx)
-        )
+        result = await self.llm.extract_symptoms(note, ctx)
         symptoms = result.get("symptoms", [])
         self._log(state, "extract_symptoms", f"found {len(symptoms)} symptoms: {symptoms}")
         return {"extracted_symptoms": symptoms}
 
-    def _map_to_ontology(self, state: GraphState):
+    async def _map_to_ontology(self, state: GraphState):
         symptoms = [s["term"] for s in state.get("extracted_symptoms", [])]
         if not symptoms:
             return {"ontology_mappings": {}}
@@ -145,26 +140,22 @@ class SpeculativeGraphRAG:
         self._log(state, "map_to_ontology", f"mapped {len(mappings)} symptoms to {total_edges} ontology edges")
         return {"ontology_mappings": mappings}
 
-    def _assess_differential(self, state: GraphState):
+    async def _assess_differential(self, state: GraphState):
         symptoms = [s["term"] for s in state.get("extracted_symptoms", [])]
         mappings_flat = []
         for symptom_edges in state.get("ontology_mappings", {}).values():
             mappings_flat.extend(symptom_edges)
-        result = asyncio.get_event_loop().run_until_complete(
-            self.llm.assess_differential(symptoms, mappings_flat, state.get("patient_context"))
-        )
+        result = await self.llm.assess_differential(symptoms, mappings_flat, state.get("patient_context"))
         triplets = result.get("triplets", [])
         reasoning = result.get("reasoning", "")
         self._log(state, "assess_differential", f"proposed {len(triplets)} differential edges")
         return {"proposed_path": triplets, "reasoning_trace": reasoning, "prior_reasoning": reasoning}
 
-    def _correct_differential(self, state: GraphState):
+    async def _correct_differential(self, state: GraphState):
         violations = state.get("safety_result", {}).get("violations", [])
         prior = state.get("reasoning_trace", "")
-        result = asyncio.get_event_loop().run_until_complete(
-            self.llm.regenerate_with_feedback(
-                state["patient_note"], violations, prior, state.get("patient_context")
-            )
+        result = await self.llm.regenerate_with_feedback(
+            state["patient_note"], violations, prior, state.get("patient_context")
         )
         triplets = result.get("triplets", [])
         reasoning = result.get("reasoning", "")
@@ -177,13 +168,13 @@ class SpeculativeGraphRAG:
             "violations": violations,
         }
 
-    def _verify_safety(self, state: GraphState):
+    async def _verify_safety(self, state: GraphState):
         path = state.get("proposed_path", [])
         ctx = state.get("patient_context", {})
 
         neo_result = self.verifier.validate(path)
         sym_result = self.symbolic.validate(path, ctx)
-        opa_result = asyncio.get_event_loop().run_until_complete(self.opa.evaluate({"proposed_path": path}))
+        opa_result = await self.opa.evaluate({"proposed_path": path})
 
         opa_allow = opa_result.get("allow", True)
         merged_valid = neo_result["is_valid"] and sym_result["is_valid"] and opa_allow
@@ -232,7 +223,7 @@ class SpeculativeGraphRAG:
             return "escalate"
         return "assess_differential"
 
-    def _synthesize(self, state: GraphState):
+    async def _synthesize(self, state: GraphState):
         path = state.get("proposed_path", [])
         reasoning = surface_reasoning_for_clinician(state.get("reasoning_trace", ""), 1500)
         sources = []
@@ -271,11 +262,9 @@ class SpeculativeGraphRAG:
             "final_output": f"Escalated to human review. {reason} Violations: {json.dumps(violations, indent=2)}",
         }
 
-    def run(self, patient_note: str, patient_context: Optional[Dict] = None, backend_key: Optional[str] = None) -> GraphState:
+    async def run(self, patient_note: str, patient_context: Optional[Dict] = None, backend_key: Optional[str] = None) -> GraphState:
         if backend_key and self.router:
-            routed = asyncio.get_event_loop().run_until_complete(
-                self.router.route(patient_note)
-            )
+            routed = await self.router.route(patient_note)
             backend_key = routed
         initial_state: GraphState = {
             "patient_note": patient_note,
@@ -295,4 +284,4 @@ class SpeculativeGraphRAG:
             "violations": [],
             "prior_reasoning": "",
         }
-        return self.workflow.invoke(initial_state, config={"recursion_limit": 20})
+        return await self.workflow.ainvoke(initial_state, config={"recursion_limit": 20})
