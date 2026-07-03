@@ -95,7 +95,7 @@ Medical LLMs hallucinate when given open-ended generative control. Even with pos
 | **API** | `/health` probes Neo4j / Qdrant / OPA / Redis | ✅ |
 | **API** | `/v1/speculate` — full Type 2 pipeline | ✅ |
 | **API** | `/v1/reasoning_trace/{id}` — clinician-reviewable trace | ✅ |
-| **Infra** | docker-compose with 8 services (all healthchecked) | ✅ |
+| **Infra** | docker-compose with 5 default services (7 with optional profiles) | ✅ |
 | **Infra** | vLLM GPU profile (profiles: ["gpu"]) | ✅ |
 | **Infra** | Jaeger tracing profile (profiles: ["tracing"]) | ✅ |
 | **Infra** | GitHub Actions CI with service containers | ✅ |
@@ -332,7 +332,7 @@ speculative-clinical-graphrag/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml              # GitHub Actions — service containers + seed + test
-├── docker-compose.yml          # 8 services: Neo4j, Qdrant, Redis, OPA, FastAPI, vLLM (GPU profile), Jaeger (tracing profile)
+├── docker-compose.yml          # 5 default services: Neo4j, Qdrant, Redis, OPA, FastAPI; +vLLM (gpu), +Jaeger (tracing)
 ├── requirements.txt            # Python dependencies
 └── README.md
 ```
@@ -457,8 +457,8 @@ pytest tests/ -v
 |------|-------|----------------|
 | `test_api.py` | 4 | Health probes, speculate endpoint, escalation, reasoning trace |
 | `test_workflow.py` | 4 | Valid path, invalid→escalate, nonsensical input, reasoning trace |
-| `test_llm_backends.py` | 5 | All 4 backends + semantic router (1 skip: Ollama) |
-| `test_verification.py` | 6 | Neo4j (2 skip), SymbolicVerifier, OPA (1 skip) |
+| `test_llm_backends.py` | 6 | All 4 backends, semantic router, think tag parsing (1 skip: Ollama) |
+| `test_verification.py` | 4 | Neo4j valid/invalid (2 skip), SymbolicVerifier, OPA (1 skip) |
 | `test_retrieval.py` | 4 | HybridRetriever structure, in-memory graph, fusion scores |
 | `test_ontology_etl.py` | 4 | All 4 parser not-found paths |
 | `test_supervisor.py` | 3 | Delegation, unknown task, safety verification |
