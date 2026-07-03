@@ -18,11 +18,13 @@
 
 ## 🎯 What Problem Does This Solve?
 
-Medical LLMs hallucinate. They generate plausible-sounding but clinically dangerous pathways — drug interactions that do not exist, symptom-disease links unsupported by evidence, contraindications that violate guidelines.
+Medical LLMs hallucinate when given open-ended generative control. Even with post-generation validation, relying on neural weights to independently map complex, multi-step clinical pathways is inherently unsafe. 
 
-**Speculative Clinical GraphRAG** eliminates this risk by forcing the model to *propose* a diagnostic path, then *proving* it against a grounded medical knowledge graph before any patient-facing output is produced.
+**Speculative Clinical GraphRAG** solves this by inverting the control loop. Implementing a **Type 2 Symbolic[Neuro] Architecture**, the system never allows the LLM to freewheel. Instead, a deterministic Symbolic Planner decomposes the clinical case into bounded sub-goals. The LLM is invoked strictly as a subroutine to extract specific entities or propose constrained differentials, which are instantly validated against a grounded medical knowledge graph (Neo4j) and policy engine (OPA) before proceeding to the next step.
 
-&gt; **"Speculate-then-Validate"**: The model proposes a traversal path through the medical knowledge graph. The system validates this path against SNOMED-CT, ICD-10, and institutional ontologies. Only verified paths proceed to RAG synthesis. Invalid paths trigger corrective iteration or human escalation.
+> **The Neuro-Symbolic Invariant**: The symbolic planner drives the state machine. The LLM is treated as a highly capable *tool*, not the *orchestrator*. No diagnostic pathway advances without mathematical and rule-based verification.
+
+---
 
 ---
 
@@ -30,11 +32,28 @@ Medical LLMs hallucinate. They generate plausible-sounding but clinically danger
 
 ### Architecture Paradigm
 
-<p align="center">
-  <img src="assets/graphrag.png" alt="AgenticRAG" width="700px">
-</p>
+Instead of `LLM generates -> Symbolic verifies`, the system follows:
+`Symbolic Planner decomposes -> Bounded LLM Extraction -> Ontology Query -> Bounded LLM Proposal -> Policy Engine Verification -> State Update`.
 
+#### Core Components
 
+| Component | Technology | Role in Pipeline |
+|-----------|-----------|------------------|
+| **Symbolic Planner** | LangGraph StateGraph | Orchestrates the deterministic workflow, maintaining a strictly typed Working Memory (`GraphState`). |
+| **Bounded Reasoner** | vLLM (MedGemma-4B-IT / DeepSeek-R1) | Executes highly constrained tasks (e.g., entity extraction, bounded differential generation) via structured JSON output. |
+| **Knowledge Graph** | Neo4j Community + Cypher | Provides the definitive symbolic taxonomy for medical entities and relationships. |
+| **Vector Retrieval** | Qdrant | Hybrid RAG component for semantic search over embedded ontology metadata. |
+| **Safety Guardrails** | Open Policy Agent (OPA) | Sidecar container executing `clinical.rego` policies to catch drug interactions and contraindications mid-reasoning. |
+
+---
+## 🚀 Applications
+
+### Clinical Decision Support
+- **Deterministic Differential Diagnosis**: Proposed symptom-disease pathways are built step-by-step and cross-referenced against institutional guidelines before presentation to clinicians.
+- **Drug Interaction Safety**: Prescription recommendations are structurally verified against OPA policies and drug-interaction graphs.
+- **Closed-Loop Intelligence**: Capable of integrating with larger enterprise systems requiring rigid, explainable audit trails.
+
+  
 
 ### Core Components
 
@@ -46,38 +65,11 @@ Medical LLMs hallucinate. They generate plausible-sounding but clinically danger
 | **API Gateway** | FastAPI + Pydantic V2 | Exposes typed endpoints with auto-generated OpenAPI documentation and interactive sandbox |
 | **Inference Backend** | vLLM (GPU) / Ollama (CPU) / MockLLM (zero-dep) | Model-agnostic abstraction supporting production, local, and CI environments |
 
-### The Self-Correcting Loop
-
-```python
-# Pseudocode of the validation logic
-if path_proposed in taxonomy_valid:
-    execute_rag()           # → Finalize with validated subgraph
-elif iteration &lt; max_iterations:
-    trigger_correction()    # → Feedback violations to reasoner, regenerate
-else:
-    escalate_to_human()     # → Flag for clinical reviewer
-```
 
 **Key invariant**: No diagnostic pathway reaches the patient without passing through the verification layer. The LLM is treated as a *hypothesis generator*, not a *source of truth*.
 
 ---
 
-## 🚀 Applications
-
-### Clinical Decision Support
-- **Differential Diagnosis Validation**: Proposed symptom-disease pathways are cross-referenced against institutional guidelines before presentation to clinicians
-- **Drug Interaction Safety**: Prescription recommendations are verified against drug-interaction graphs (RxNorm, First DataBank)
-- **Care Pathway Compliance**: Treatment recommendations validated against NCCN, AHA/ACC, or hospital-specific clinical pathways
-
-### Medical Documentation
-- **Discharge Summary Structuring**: Free-text clinical notes converted to FHIR-compliant structured data with ontology-validated entity relationships
-- **Prior Authorization Automation**: Clinical evidence mapped against CMS regulatory vector stores with automated compliance documentation
-
-### Research & Quality Assurance
-- **Literature Review Validation**: Automated extraction of biomedical claims with verification against curated knowledge bases
-- **Clinical Trial Eligibility**: Patient criteria matched against trial ontologies with explainable reasoning traces
-
----
 
 ## 📦 Installation
 
@@ -169,6 +161,7 @@ class DeepSeekR1Backend(LLMBackend):
         ...
         return reasoning, triplets
 ```
+**Key invariant**: No diagnostic pathway reaches the patient without passing through the verification layer. The LLM is treated as a *hypothesis generator*, not a *source of truth*.
 
 ---
 
