@@ -3,6 +3,7 @@ from langgraph.graph import StateGraph, END
 from core.llm_backend import LLMBackend, MockLLMBackend, SemanticRouter
 from core.verification_layer import Neo4jVerifier, SymbolicVerifier, OPAClient, lookup_all_by_symptoms
 from core.reasoning_extractor import surface_reasoning_for_clinician
+from core.retrieval import HybridRetriever
 import logging
 import time
 import json
@@ -19,6 +20,9 @@ class GraphState(TypedDict):
     # Input (immutable after ingest)
     patient_note: str
     patient_context: Dict
+
+    # Step 0b: Hybrid RAG retrieval context
+    retrieval_context: str
 
     # Step A: LLM-extracted symptoms
     extracted_symptoms: List[Dict]
@@ -49,12 +53,14 @@ class SpeculativeGraphRAG:
         verifier: Optional[Neo4jVerifier] = None,
         symbolic_verifier: Optional[SymbolicVerifier] = None,
         opa_client: Optional[OPAClient] = None,
+        retriever: Optional[HybridRetriever] = None,
         max_iterations: int = 3,
     ):
         self.llm = llm or MockLLMBackend()
         self.verifier = verifier or Neo4jVerifier()
         self.symbolic = symbolic_verifier or SymbolicVerifier()
         self.opa = opa_client or OPAClient()
+        self.retriever = retriever or HybridRetriever()
         self.router = SemanticRouter()
         self.max_iterations = max_iterations
         self.workflow = self._build_graph()
@@ -62,6 +68,7 @@ class SpeculativeGraphRAG:
     def _build_graph(self):
         workflow = StateGraph(GraphState)
         workflow.add_node("ingest", self._ingest)
+        workflow.add_node("retrieve_context", self._retrieve_context)
         workflow.add_node("extract_symptoms", self._extract_symptoms)
         workflow.add_node("map_to_ontology", self._map_to_ontology)
         workflow.add_node("assess_differential", self._assess_differential)
@@ -69,7 +76,8 @@ class SpeculativeGraphRAG:
         workflow.add_node("synthesize", self._synthesize)
         workflow.add_node("escalate", self._escalate)
         workflow.set_entry_point("ingest")
-        workflow.add_edge("ingest", "extract_symptoms")
+        workflow.add_edge("ingest", "retrieve_context")
+        workflow.add_edge("retrieve_context", "extract_symptoms")
         workflow.add_edge("extract_symptoms", "map_to_ontology")
         workflow.add_edge("map_to_ontology", "assess_differential")
         workflow.add_edge("assess_differential", "verify_safety")
@@ -108,10 +116,22 @@ class SpeculativeGraphRAG:
         self._log(state, "ingest", f"ctx={ctx}")
         return {"patient_context": ctx, "iteration_count": 1}
 
-    def _extract_symptoms(self, state: GraphState):
+    def _retrieve_context(self, state: GraphState):
         note = state["patient_note"]
         result = asyncio.get_event_loop().run_until_complete(
-            self.llm.extract_symptoms(note, state.get("patient_context"))
+            self.retriever.retrieve(note)
+        )
+        ctx = result.get("merged_context", "")
+        self._log(state, "retrieve_context", f"vector={len(result['vector_results'])} graph={len(result['graph_results'])}")
+        return {"retrieval_context": ctx}
+
+    def _extract_symptoms(self, state: GraphState):
+        note = state["patient_note"]
+        ctx = dict(state.get("patient_context") or {})
+        if state.get("retrieval_context"):
+            ctx["retrieval_context"] = state["retrieval_context"]
+        result = asyncio.get_event_loop().run_until_complete(
+            self.llm.extract_symptoms(note, ctx)
         )
         symptoms = result.get("symptoms", [])
         self._log(state, "extract_symptoms", f"found {len(symptoms)} symptoms: {symptoms}")
@@ -204,6 +224,7 @@ class SpeculativeGraphRAG:
                 sym: len(edges)
                 for sym, edges in state.get("ontology_mappings", {}).items()
             },
+            "retrieval_context": state.get("retrieval_context", ""),
         }
         self._log(state, "synthesize", f"sources={len(sources)}")
         return {
@@ -228,6 +249,7 @@ class SpeculativeGraphRAG:
         initial_state: GraphState = {
             "patient_note": patient_note,
             "patient_context": patient_context or {},
+            "retrieval_context": "",
             "extracted_symptoms": [],
             "ontology_mappings": {},
             "proposed_path": [],
