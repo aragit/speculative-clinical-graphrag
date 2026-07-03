@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <b>Type 2 Symbolic[Neuro] Clinical Decision Support — every diagnostic pathway is verified against grounded medical taxonomies and policy engines before reaching a clinician.</b>
+  <b>Neuro-Symbolic Clinical Decision Support — every diagnostic pathway is verified against grounded medical taxonomies and policy engines before reaching a clinician.</b>
 </p>
 
 ---
