@@ -44,7 +44,7 @@
 
 Medical LLMs hallucinate when given open-ended generative control. Even with post-generation validation, relying on neural weights to independently map complex, multi-step clinical pathways is inherently unsafe.
 
-**Speculative Clinical GraphRAG** inverts the control loop using a **Type 2 Symbolic[Neuro] Architecture**. A deterministic Symbolic Planner decomposes each clinical case into bounded sub-goals. The LLM is invoked strictly as a subroutine to extract specific entities or propose constrained differentials, which are instantly validated against a grounded medical knowledge graph (Neo4j), vector embeddings (Qdrant), and policy engine (OPA) before proceeding.
+**Speculative Clinical GraphRAG** inverts the control loop using  **Verify-then-generate** Pattern. A deterministic Symbolic Planner decomposes each clinical case into bounded sub-goals. The LLM is invoked strictly as a subroutine to extract specific entities or propose constrained differentials, which are instantly validated against a grounded medical knowledge graph (Neo4j), vector embeddings (Qdrant), and policy engine (OPA) before proceeding.
 
 > **Neuro-Symbolic Invariant**: The symbolic planner drives the state machine. The LLM is a *tool*, not the *orchestrator*. No diagnostic pathway advances without mathematical and rule-based verification.
 
@@ -70,7 +70,7 @@ Medical LLMs hallucinate when given open-ended generative control. Even with pos
 
 | Area | Feature | Status |
 |------|---------|--------|
-| **Pipeline** | Type 2 Symbolic[Neuro] linear workflow | ✅ |
+| **Pipeline** | Verify-then-generate pattern of Type 2 Symbolic[Neuro]  Verify-then-generate pattern linear workflow | ✅ |
 | **Pipeline** | Hybrid RAG (vector + graph) retrieval context | ✅ |
 | **Pipeline** | Correction loop: up to 3 automated iterations before escalation | ✅ |
 | **LLM** | 4 backends: MockLLM (zero-dep), Ollama (CPU), DeepSeek-R1, vLLM (GPU) | ✅ |
@@ -93,7 +93,6 @@ Medical LLMs hallucinate when given open-ended generative control. Even with pos
 | **API** | Rate limiting (sliding window, 100 req/min default) | ✅ |
 | **API** | Request ID + process time headers | ✅ |
 | **API** | `/health` probes Neo4j / Qdrant / OPA / Redis | ✅ |
-| **API** | `/v1/speculate` — full Type 2 pipeline | ✅ |
 | **API** | `/v1/reasoning_trace/{id}` — clinician-reviewable trace | ✅ |
 | **Infra** | docker-compose with 5 default services (7 with optional profiles) | ✅ |
 | **Infra** | vLLM GPU profile (profiles: ["gpu"]) | ✅ |
@@ -203,7 +202,7 @@ Once running: `http://localhost:8000/docs`
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | ❌ No | Infrastructure liveness probe |
-| `POST` | `/v1/speculate` | ✅ Optional | Full Type 2 pipeline |
+| `POST` | `/v1/speculate` | ✅ Optional | Full Verify-then-generate pattern Type 2 pipeline |
 | `GET` | `/v1/reasoning_trace/{trace_id}` | ✅ Optional | Retrieve reasoning trace |
 
 ### Example Request
@@ -341,7 +340,7 @@ speculative-clinical-graphrag/
 
 ## 🧩 Module Deep-Dive
 
-### `core/workflow.py` — Type 2 Pipeline
+### `core/workflow.py` 
 
 The LangGraph `StateGraph` executes 9 typed nodes as a linear pipeline with a single correction loop. Nodes 1–6 run sequentially: **ingest** (extract age/gender/meds from note), **retrieve_context** (hybrid vector + graph search), **extract_symptoms** (LLM subroutine), **map_to_ontology** (symbolic lookup, no LLM), **assess_differential** (LLM proposes diagnostic triplets), **verify_safety** (3-layer check: Neo4j + symbolic rules + OPA). If verification passes, the graph routes to **synthesize** (format validated output). If it fails and `iteration_count < max_iterations` (default 3), it routes to **correct_differential**, which feeds violations + prior reasoning back to the LLM, then loops back to **assess_differential** for re-evaluation. If max iterations are exceeded, it routes to **escalate** (human review with full trace).
 
@@ -484,19 +483,7 @@ pytest tests/ -v
 
 ---
 
-## 🛣 Roadmap
 
-| Phase | Deliverable | Status |
-|-------|-------------|--------|
-| **Phase 1** | Knowledge Foundation — in-memory EDGES ontology, Neo4j schema | ✅ Complete |
-| **Phase 2** | Type 2 Pipeline — LangGraph state machine with 9 nodes + correction loop | ✅ Complete |
-| **Phase 3** | Safety Stack — Neo4j + SymbolicVerifier + OPA | ✅ Complete |
-| **Phase 4** | Hybrid RAG — Qdrant vector search + Neo4j graph | ✅ Complete |
-| **Phase 5** | Production API — auth, rate limiting, SSE streaming | ⬜ In progress |
-| **Phase 6** | Multi-Hospital Federation — federated taxonomy sync | 🔬 Research |
-| **Phase 7** | Type 6 (Neuro[Symbolic]) — end-to-end differentiable neuro-symbolic | 🔬 Research |
-
----
 
 ## 🔒 Safety & Compliance
 
