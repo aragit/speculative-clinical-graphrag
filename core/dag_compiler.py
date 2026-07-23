@@ -14,7 +14,9 @@ class DAGCompiler:
             for dep in s.get("depends_on", []):
                 edges.append({"from": dep, "to": s["id"]})
         topo = self._topological_sort(nodes, edges)
-        return {"nodes": nodes, "edges": edges, "is_dag": len(topo) == len(nodes), "topological_order": topo}
+        if len(topo) != len(nodes):
+            raise ValueError("Cyclic dependency detected in DAG execution plan")
+        return {"nodes": nodes, "edges": edges, "is_dag": True, "topological_order": topo}
 
     def validate_dag(self, dag: Dict) -> bool:
         return dag.get("is_dag", False)

@@ -11,6 +11,7 @@ class MultiTieredMemory:
         self._vector_store = vector_store
         self._graph_store = graph_store
         self._redis = None
+        self.working_memory: Dict[str, Dict] = {}
 
     def _get_redis(self):
         if self._redis is None:
@@ -82,3 +83,12 @@ class MultiTieredMemory:
         except Exception as e:
             logger.warning(f"Semantic query failed: {e}")
             return []
+
+    def get_working_memory(self, session_id: str = "default") -> Dict:
+        return self.working_memory.get(session_id, {})
+
+    def get_episodic_memory(self, session_id: str = "default") -> Any:
+        return self._vector_store
+
+    def get_semantic_memory(self) -> Any:
+        return self._graph_store

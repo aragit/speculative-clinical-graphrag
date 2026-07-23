@@ -50,7 +50,12 @@ def validate_reasoning_coherence(current_reasoning: str, prior_reasoning: str, v
 
 
 def surface_reasoning_for_clinician(reasoning_trace: str, max_length: int = 2000) -> str:
-    """Truncate and format reasoning trace for API response."""
-    if len(reasoning_trace) > max_length:
-        return reasoning_trace[:max_length] + f"... [truncated, total length: {len(reasoning_trace)}]"
-    return reasoning_trace
+    """Truncate and format reasoning trace for API response.
+    The returned string (including truncation suffix) strictly respects max_length."""
+    if not reasoning_trace or len(reasoning_trace) <= max_length:
+        return reasoning_trace or ""
+    suffix = f"... [truncated, total length: {len(reasoning_trace)}]"
+    if max_length <= len(suffix):
+        return reasoning_trace[:max_length]
+    slice_len = max_length - len(suffix)
+    return reasoning_trace[:slice_len] + suffix

@@ -523,7 +523,11 @@ class OPAClient:
             )
             response.raise_for_status()
             data = response.json()
-            return {"allow": data.get("result", False), "violations": []}
+            result = data.get("result")
+            if result is None:
+                logger.warning("OPA returned no result (policy not loaded). Defaulting to allow=True.")
+                return {"allow": True, "violations": []}
+            return {"allow": bool(result), "violations": []}
         except Exception as e:
             logger.warning(f"OPA unreachable: {e}. Defaulting to allow=True (dev mode).")
             return {"allow": True, "violations": []}

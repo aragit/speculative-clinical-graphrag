@@ -16,7 +16,13 @@ class IdempotencyManager:
             self._redis = redis.from_url(self.redis_url, decode_responses=True)
         return self._redis
 
-    def generate_key(self, trace_id: str, tool_name: str, payload: Dict) -> str:
+    def generate_key(self, trace_id_or_payload=None, tool_name: str = "default", payload: Dict = None) -> str:
+        if payload is None and isinstance(trace_id_or_payload, dict):
+            payload = trace_id_or_payload
+            trace_id = "default"
+        else:
+            trace_id = str(trace_id_or_payload) if trace_id_or_payload else "default"
+            payload = payload or {}
         canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
         return str(uuid.uuid5(namespace, f"{trace_id}:{tool_name}:{canonical}"))
