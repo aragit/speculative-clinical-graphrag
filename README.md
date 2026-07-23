@@ -29,6 +29,7 @@
 - [API Reference](#-api-reference)
 - [Project Directory Structure](#-project-directory-structure)
 - [Module & Layer Deep-Dive](#-module--layer-deep-dive)
+- [LLM Backends & Bounded Subroutines](#-llm-backends--bounded-subroutines-layer-4-isolation)
 - [Deterministic LangGraph vs. Probabilistic Routing](#-deterministic-langgraph-vs-probabilistic-routing)
 - [Testing & Verification](#-testing--verification)
 - [Docker & CI/CD](#-docker--cicd)
@@ -249,12 +250,35 @@ The `SpeculativeGraphRAG` LangGraph `StateGraph` executes: **ingest → retrieve
 
 ### `core/llm_backend.py` — LLM Abstraction Layer
 
-| Backend | Use Case |
-|---------|----------|
-| `MockLLMBackend` | Development / CI / zero-dependency testing |
-| `OllamaBackend` | Local CPU inference |
-| `DeepSeekR1Backend` | Production GPU via vLLM |
-| `MedGemmaBackend` | Medical fine-tuned model via vLLM |
+## 🤖 LLM Backends & Bounded Subroutines (Layer 4 Isolation)
+
+The system supports four selectable backends via the `RUNTIME_LLM` environment variable:
+
+| Backend | Class | Default Model Target | Primary Use Case |
+| :--- | :--- | :--- | :--- |
+| **`mock`** | `MockLLMBackend` | — | Zero-GPU local unit testing & CI/CD pipeline |
+| **`ollama`** | `OllamaBackend` | `gemma2:2b` | Local CPU developer sandbox |
+| **`deepseek_r1`** | `DeepSeekR1Backend` | `deepseek-ai/deepseek-r1-distill-qwen-32b` | Production GPU complex reasoning via vLLM |
+| **`medgemma_4b_it`**| `MedGemmaBackend` | `google/MedGemma-4B-IT` | On-prem fine-tuned clinical inference engine |
+
+### Bounded Subroutines
+The LLM's role is strictly confined to three typed JSON subroutines at Layer 4:
+
+1. **`extract_symptoms(patient_note, context)`**: Extracts structured findings from free-text clinical notes.
+   * *Returns:* `{"symptoms": [{"term": "Dyspnea", "confidence": 0.95}]}`
+2. **`assess_differential(symptoms, ontology_mappings, patient_context)`**: Proposes ranked diagnostic triplets given grounded ontology mappings.
+   * *Returns:* `{"triplets": [{"head": "Dyspnea", "relation": "INDICATES", "tail": "Heart Failure", "confidence": 0.92}]}`
+3. **`regenerate_with_feedback(patient_note, violations, prior_reasoning, context)`**: Re-proposes triplets using feedback when symbolic verification rejects a path.
+
+### Strict Negative Invariants (What the LLM Does NOT Do)
+To ensure zero-trust compliance, the LLM is explicitly stripped of execution privileges:
+
+* ❌ **No Execution Routing**: Execution flow is managed deterministically by `core/orchestrator.py` and `core/dag_compiler.py`.
+* ❌ **No Safety Validation**: Safety is governed strictly by `SymbolicVerifier` and `OPAClient`.
+* ❌ **No Knowledge Graph Traversal**: Traversal is handled via Cypher queries and grounded ontology lookups (`core/verification_layer.py`).
+* ❌ **No Escalation Decisions**: Routing to human review is controlled deterministically by `_route()` in `core/workflow.py`.
+
+> **Core Architectural Principle**: The symbolic engine drives the state machine; the LLM is a tool, not the orchestrator. No diagnostic pathway advances without deterministic verification.
 
 ### `core/verification_layer.py` — Safety Stack
 
