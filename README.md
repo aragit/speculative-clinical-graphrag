@@ -30,6 +30,7 @@
 - [Project Directory Structure](#-project-directory-structure)
 - [Module & Layer Deep-Dive](#-module--layer-deep-dive)
 - [LLM Backends & Bounded Subroutines](#-llm-backends--bounded-subroutines-layer-4-isolation)
+- [MCP & Governed Tool Execution](#%EF%B8%8F-model-context-protocol-mcp--governed-tool-execution)
 - [Deterministic LangGraph vs. Probabilistic Routing](#-deterministic-langgraph-vs-probabilistic-routing)
 - [Testing & Verification](#-testing--verification)
 - [Docker & CI/CD](#-docker--cicd)
@@ -286,6 +287,37 @@ Three independent verification layers:
 1. **Neo4jVerifier**: Cypher `MATCH` queries (falls back to in-memory EDGES when unreachable)
 2. **SymbolicVerifier**: Hardcoded drug interaction rules + age-based contraindications
 3. **OPAClient**: HTTP calls to OPA sidecar evaluating `clinical.rego` policies
+
+### `core/mcp_registry.py` — Model Context Protocol (MCP) & Governed Tool Execution
+
+The repository leverages the **Model Context Protocol (MCP)** specification via `core/mcp_registry.py` (`MCPRegistry`) to expose deterministic clinical skills, graph query tools, and external adapters (e.g., FHIR reconciliation, ICU vitals forecasting) without tight coupling.
+
+#### Governed Tool Execution vs. Standard MCP Tool Calling
+
+Unlike standard agentic frameworks where the LLM autonomously decides when and how to invoke MCP tools, our Type 2 Neuro-Symbolic architecture enforces strict governance:
+
+```
+❌ Standard Agent RAG (Probabilistic Tool Calling)
+User Query ──► LLM ──► [Selects MCP Tool] ──► [Executes Tool] ──► LLM
+(Risk: Hallucinated arguments, out-of-order execution, unvalidated overrides)
+
+✅ Speculative Clinical GraphRAG (Governed Tool Execution)
+User Query ──► DAG Orchestrator ──► MCP Tool Call (via MCPRegistry) ──► Validation Gate ──► LLM Synthesis
+(Safety: Orchestrator drives tools; LLM never invokes tools directly)
+```
+
+#### Registered Tools & Clinical Skills
+
+All domain capabilities are registered within `core/mcp_registry.py` and routed deterministically by `core/supervisor.py` (`SupervisorAgent`):
+
+| Skill / Tool Category | Interface | Execution Engine | Primary Responsibility |
+| :--- | :--- | :--- | :--- |
+| **Ontology Mapping** | `lookup_all_by_symptoms` | `core/verification_layer.py` | Deterministic SNOMED-CT / ICD-10 / RxNorm triple lookup |
+| **Safety Governance** | `SymbolicVerifier` / `OPAClient` | `infra/opa/policies/` | Sub-50ms Rego policy evaluation for drug interactions |
+| **Hybrid Retrieval** | `HybridRetriever` | `core/retrieval.py` | Fusion search across Qdrant vectors and Cypher graph paths |
+| **Clinical Adapters** | MCP Tools (`MCPRegistry`) | `core/mcp_registry.py` | External ICU vitals forecasting, FHIR graph reconciliation |
+
+> **Key Invariant**: The LLM never directly executes MCP tools or generates raw tool arguments. Tools are executed deterministically by the `DAGCompiler` execution plan, and only the validated outputs are supplied to the LLM at Layer 4 for natural language synthesis.
 
 ---
 
