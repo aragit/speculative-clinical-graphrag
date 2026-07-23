@@ -403,6 +403,24 @@ class VLLMBackend(OpenAICompatBackend):
     def backend_type(self) -> str:
         return "vllm"
 
+class MedGemmaBackend(VLLMBackend):
+    """MedGemma-4B-IT backend via vLLM / OpenAI-compatible server."""
+
+    def __init__(
+        self,
+        base_url: str = None,
+        model: str = None,
+        timeout: float = 120.0,
+    ):
+        base_url = base_url or os.getenv("VLLM_URL", "http://localhost:8000/v1")
+        model = model or os.getenv("VLLM_MODEL", "google/MedGemma-4B-IT")
+        super().__init__(base_url=base_url, model=model, timeout=timeout)
+
+    @property
+    def backend_type(self) -> str:
+        return "medgemma_4b_it"
+
+
 class SemanticRouter:
     def __init__(self, config: Optional[Dict] = None):
         self.config = config or {}

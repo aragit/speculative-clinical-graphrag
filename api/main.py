@@ -5,7 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.schemas import SpeculateRequest, SpeculateResponse, ReasoningTraceResponse, HealthResponse
+from api.schemas import (
+    SpeculateRequest, SpeculateResponse, ReasoningTraceResponse,
+    HealthResponse, OverrideRequest, OverrideResponse,
+)
 from api.dependencies import get_neo4j_verifier, get_symbolic_verifier, get_opa_client, get_llm_backend
 from api.middleware import RequestIDMiddleware, APIKeyMiddleware, RateLimitMiddleware
 from core.workflow import SpeculativeGraphRAG
@@ -145,4 +148,71 @@ async def reasoning_trace(trace_id: str):
         surface_output=t["surface_output"],
         validation_history=t["validation_history"],
         escalation_reason=t["escalation_reason"],
+    )
+
+
+@app.post("/v1/override", response_model=OverrideResponse)
+async def override_trace(request: OverrideRequest):
+    """
+    Human-in-the-Loop override endpoint.
+    Allows a clinician to approve, reject, or modify an escalated trace.
+    """
+    if request.trace_id not in _trace_store:
+        raise HTTPException(status_code=404, detail="Trace ID not found")
+
+    trace = _trace_store[request.trace_id]
+
+    # Verify trace is in an escalated state
+    if trace.get("escalation_reason") is None and trace.get("status") != "escalated":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Trace {request.trace_id} is not in an escalated state (current status: {trace.get('status', 'unknown')}). Only escalated traces can be overridden.",
+        )
+
+    # Apply override action
+    if request.override_action == "approve":
+        trace["status"] = "clinician_approved"
+        trace["escalation_reason"] = None
+        trace["clinician_notes"] = request.clinician_notes
+        trace["override_action"] = "approve"
+        surface_output = trace.get("surface_output", "")
+        logger.info(f"Trace {request.trace_id} approved by clinician")
+
+    elif request.override_action == "reject":
+        trace["status"] = "clinician_rejected"
+        trace["clinician_notes"] = request.clinician_notes
+        trace["override_action"] = "reject"
+        surface_output = f"Clinician rejected the proposed pathway. Notes: {request.clinician_notes}"
+        trace["surface_output"] = surface_output
+        logger.info(f"Trace {request.trace_id} rejected by clinician")
+
+    elif request.override_action == "modify":
+        if not request.modified_path:
+            raise HTTPException(
+                status_code=400,
+                detail="'modified_path' is required when override_action is 'modify'",
+            )
+        trace["status"] = "clinician_modified"
+        trace["escalation_reason"] = None
+        trace["modified_path"] = request.modified_path
+        trace["clinician_notes"] = request.clinician_notes
+        trace["override_action"] = "modify"
+        surface_output = json.dumps({
+            "modified_path": request.modified_path,
+            "clinician_notes": request.clinician_notes,
+            "original_trace_id": request.trace_id,
+        }, indent=2)
+        trace["surface_output"] = surface_output
+        logger.info(f"Trace {request.trace_id} modified by clinician")
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid override_action: {request.override_action}")
+
+    return OverrideResponse(
+        trace_id=request.trace_id,
+        status=trace["status"],
+        override_action=request.override_action,
+        clinician_notes=request.clinician_notes,
+        surface_output=trace.get("surface_output"),
+        modified_path=trace.get("modified_path"),
     )

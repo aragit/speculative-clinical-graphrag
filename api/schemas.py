@@ -1,10 +1,12 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Literal
+from datetime import datetime
+
 
 class SpeculateRequest(BaseModel):
     patient_note: str = Field(..., min_length=1, max_length=10000)
     patient_context: Optional[Dict] = Field(default=None, description="Age, gender, allergies, current meds")
-    preferred_backend: Optional[Literal["mock", "ollama", "deepseek_r1"]] = Field(default=None)
+    preferred_backend: Optional[Literal["mock", "ollama", "deepseek_r1", "medgemma_4b_it"]] = Field(default=None)
 
 class SpeculateResponse(BaseModel):
     proposed_path: List[Dict]
@@ -34,3 +36,28 @@ class HealthResponse(BaseModel):
     opa_connected: bool
     redis_connected: bool = False
     version: str = "0.3.0"
+
+
+class OverrideRequest(BaseModel):
+    trace_id: str = Field(..., description="ID of the escalated trace to override")
+    override_action: Literal["approve", "reject", "modify"] = Field(
+        ..., description="Clinician decision: approve, reject, or modify the path"
+    )
+    modified_path: Optional[List[Dict]] = Field(
+        default=None,
+        description="Replacement diagnostic triplets when override_action is 'modify'",
+    )
+    clinician_notes: str = Field(
+        ..., min_length=1, max_length=5000,
+        description="Free-text clinician justification for the override",
+    )
+
+
+class OverrideResponse(BaseModel):
+    trace_id: str
+    status: Literal["clinician_approved", "clinician_rejected", "clinician_modified"]
+    override_action: str
+    clinician_notes: str
+    surface_output: Optional[str] = None
+    modified_path: Optional[List[Dict]] = None
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
