@@ -1,4 +1,8 @@
 <h1 align="center">Speculative Clinical GraphRAG</h1>
+
+<p align="center">
+  <img src="assets/ban.png" alt="Speculative Clinical GraphRAG Banner" width="100%">
+</p>
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-blue?style=flat-square&logo=python" alt="Python 3.12">
   <img src="https://img.shields.io/badge/Architecture-Type_2_Symbolic_Neuro-purple?style=flat-square" alt="Type 2 Symbolic Neuro">
