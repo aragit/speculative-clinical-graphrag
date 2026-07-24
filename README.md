@@ -157,13 +157,13 @@ The architecture enforces the **Model Context Protocol (MCP)** specification via
 │ MCP Skill:            │     │ MCP Skill:            │     │ MCP Skill:            │
 │ Clinical Extraction   │     │ Ontology Traversal    │     │ Policy Governance     │
 └───────────┬───────────┘     └───────────┬───────────┘     └───────────┬───────────┘
-            │ obs:return                   │ obs:return                   │ obs:return
+            │ obs:return                  │ obs:return                  │ obs:return
             └─────────────────────────────┼─────────────────────────────┘
                                           │
                                           ▼
                                ┌───────────────────────┐
-                               │ MCP Skill:              │
-                               │ Bounded Synthesis       │
+                               │ MCP Skill:            │
+                               │ Bounded Synthesis     │
                                └───────────────────────┘
 ```
 
@@ -323,6 +323,14 @@ The system supports four selectable backends via the `RUNTIME_LLM` environment v
 
 ---
 
+## Deterministic LangGraph vs. Probabilistic Routing
+
+Standard Agentic Usage (Probabilistic): LangGraph uses LLMs on conditional edges (if llm_router() == 'tool': ...). The execution path is trapped in the LLM's latent space, leaving it vulnerable to prompt injection, logic loops, and hallucinations.
+
+Our Neuro-Symbolic Usage (Deterministic Chassis): LangGraph is used strictly as a State Machine and State Checkpointer. Edge transitions and node executions are determined by core/dag_compiler.py, topological sorting, Python rule engines, and OPA policy gates. The LLM is confined inside a single node (Layer 4 Synthesis) and has zero authority to alter execution flow.
+
+---
+
 ## 🧪 Testing & Verification
 
 Run the full verification suite across all core modules:
@@ -334,7 +342,29 @@ python -m pytest tests/ -vv
 ```
 ================ 125 passed, 4 skipped in 10.86s ================
 ```
+## Test Area	What It Verifies
+Reasoning Extraction	Strict truncation math ensuring clinician traces never break length contracts
+DAG Compiler	Kahn's algorithm topological sorting & explicit cycle rejection
+Memory Tiers	Redis working memory fallback & session hydration
+Governance	Fail-secure policy evaluations with native Python sub-50ms fallback
+Idempotency	Deterministic payload UUID5 key generation
+Workflow	End-to-end 9-node state graph execution with correction loops
 
+---
+
+🐳 Docker & CI/CD
+
+docker-compose.yml
+Service	Image	Ports	Profile
+neo4j	neo4j:5.15-community	7687, 7474	default
+qdrant	qdrant/qdrant	6333	default
+redis	redis:7-alpine	6379	default
+opa	openpolicyagent/opa	8181	default
+fastapi	(builds from Dockerfile)	8000	default
+vllm	vllm/vllm-openai	8000	gpu
+jaeger	jaegertracing/all-in-one	16686	tracing
+GitHub Actions
+Service containers: Neo4j, Qdrant, Redis. OPA started via docker run after checkout with policy volume mount.
 ---
 
 ## 📄 License
