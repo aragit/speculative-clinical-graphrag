@@ -50,7 +50,7 @@ Standard "GraphRAG" and agentic frameworks suffer from a **Cognitive Control Gap
 3. **Zero-Trust Governance**: No diagnostic hypothesis or treatment pathway reaches a clinician without passing structural Cypher proof validation and external Open Policy Agent (OPA) safety checks.
 
 <p align="center">
-  <img src="assets/graphRAG.png" alt="Clinical GraphRAG Flow Diagram" width="100%">
+  <img src="assets/graphRAG.png" alt="Clinical GraphRAG Flow Diagram" width="50%">
 </p>
 
 ---
