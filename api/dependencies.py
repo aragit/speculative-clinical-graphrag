@@ -16,7 +16,7 @@ def get_opa_client() -> OPAClient:
     return OPAClient()
 
 def get_llm_backend(backend_type: str = None):
-    mode = backend_type or os.getenv("RUNTIME_LLM", "mock")
+    mode = backend_type or os.getenv("RUNTIME_LLM") or os.getenv("LLM_BACKEND", "mock")
     if mode == "ollama":
         return OllamaBackend(
             model=os.getenv("LLM_MODEL", "gemma2:2b"),

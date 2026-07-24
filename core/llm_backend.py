@@ -226,17 +226,30 @@ class MockLLMBackend(LLMBackend):
         return {"triplets": matched, "reasoning": "MockLLM differential from ontology mappings"}
 
 class OllamaBackend(LLMBackend):
-    def __init__(self, model: str = "gemma2:2b", host: str = "http://localhost:11434", timeout: float = 60.0):
+    def __init__(self, model: str = "gemma2:2b", host: str = "http://localhost:11434", timeout: float = 30.0):
         self.model = model
         self.host = host
         self.timeout = timeout
         self.client = httpx.AsyncClient(timeout=timeout)
+        self._available = None
 
     @property
     def backend_type(self) -> str:
         return "ollama"
 
+    async def _check_available(self) -> bool:
+        if self._available is not None:
+            return self._available
+        try:
+            resp = await self.client.get(f"{self.host}/api/tags", timeout=5.0)
+            self._available = resp.status_code < 500
+        except Exception:
+            self._available = False
+        return self._available
+
     async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
+        if not await self._check_available():
+            return {"triplets": [], "reasoning": "Ollama unreachable, falling back", "dag_plan": None}
         prompt = self._build_prompt(patient_note, context)
         try:
             response = await self.client.post(

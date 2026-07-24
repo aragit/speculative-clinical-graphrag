@@ -12,7 +12,9 @@ class OntologyETL:
 
     async def _get_encoder(self):
         from sentence_transformers import SentenceTransformer
-        return SentenceTransformer("all-MiniLM-L6-v2")
+        device = os.getenv("EMBEDDING_DEVICE", "cpu")
+        model_name = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        return SentenceTransformer(model_name, device=device)
 
     async def _get_qdrant(self):
         from qdrant_client import QdrantClient

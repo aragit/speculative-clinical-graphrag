@@ -2,11 +2,11 @@ import { useState, useCallback, useRef } from 'react';
 import type { MASEvent, AgentNode, TraceEntry, NodeStatus } from '../types/mas';
 
 const INITIAL_NODES: AgentNode[] = [
-  { id: 'supervisor', label: 'Supervisor Agent', status: 'idle' },
-  { id: 'clinical_extractor', label: 'Clinical Extraction Agent', status: 'idle' },
-  { id: 'ontology_traverser', label: 'Ontology Traversal Agent', status: 'idle' },
-  { id: 'opa_verifier', label: 'Policy Governance Agent', status: 'idle' },
-  { id: 'synthesizer', label: 'Synthesis Agent', status: 'idle' },
+  { id: 'supervisor', label: 'Central MCP Orchestrator', status: 'idle' },
+  { id: 'clinical_extractor', label: 'MCP Skill: Clinical Extraction', status: 'idle' },
+  { id: 'ontology_traverser', label: 'MCP Skill: Ontology Traversal', status: 'idle' },
+  { id: 'opa_verifier', label: 'MCP Skill: Policy Governance', status: 'idle' },
+  { id: 'synthesizer', label: 'MCP Skill: Bounded Synthesis', status: 'idle' },
 ];
 
 export interface EscalationData {

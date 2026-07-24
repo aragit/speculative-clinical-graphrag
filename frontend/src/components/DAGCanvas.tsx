@@ -4,6 +4,7 @@ import {
   Background,
   type Node,
   type Edge,
+  MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { AgentNode } from '../types/mas';
@@ -19,33 +20,114 @@ interface DAGCanvasProps {
   agentNodes: AgentNode[];
 }
 
+// Hub-and-spoke layout: Supervisor top-center, MCP tools spread below
 const NODE_POSITIONS: Record<string, { x: number; y: number }> = {
-  supervisor: { x: 100, y: 30 },
-  clinical_extractor: { x: 100, y: 140 },
-  ontology_traverser: { x: 100, y: 250 },
-  opa_verifier: { x: 100, y: 360 },
-  synthesizer: { x: 100, y: 470 },
+  supervisor:          { x: 200, y: 20 },
+  clinical_extractor:  { x: 20,  y: 180 },
+  ontology_traverser:  { x: 200, y: 180 },
+  opa_verifier:        { x: 380, y: 180 },
+  synthesizer:         { x: 200, y: 340 },
 };
 
+// Hub-and-spoke edges: Supervisor delegates to each MCP skill,
+// plus sequential flow between MCP skills
 const EDGES: Edge[] = [
-  { id: 'e1', source: 'supervisor', target: 'clinical_extractor' },
-  { id: 'e2', source: 'clinical_extractor', target: 'ontology_traverser' },
-  { id: 'e3', source: 'ontology_traverser', target: 'opa_verifier' },
-  { id: 'e4', source: 'opa_verifier', target: 'synthesizer' },
+  // Supervisor → MCP Skills (hub-spoke delegation)
+  {
+    id: 'e-sup-ext',
+    source: 'supervisor',
+    target: 'clinical_extractor',
+    label: 'mcp:call',
+    labelStyle: { fill: '#94a3b8', fontSize: 9, fontWeight: 500 },
+    labelBgStyle: { fill: '#1e293b', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2] as [number, number],
+    style: { stroke: '#6366f1', strokeWidth: 2 },
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1', width: 16, height: 16 },
+  },
+  {
+    id: 'e-sup-ont',
+    source: 'supervisor',
+    target: 'ontology_traverser',
+    label: 'mcp:call',
+    labelStyle: { fill: '#94a3b8', fontSize: 9, fontWeight: 500 },
+    labelBgStyle: { fill: '#1e293b', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2] as [number, number],
+    style: { stroke: '#6366f1', strokeWidth: 2 },
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1', width: 16, height: 16 },
+  },
+  {
+    id: 'e-sup-gov',
+    source: 'supervisor',
+    target: 'opa_verifier',
+    label: 'mcp:call',
+    labelStyle: { fill: '#94a3b8', fontSize: 9, fontWeight: 500 },
+    labelBgStyle: { fill: '#1e293b', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2] as [number, number],
+    style: { stroke: '#6366f1', strokeWidth: 2 },
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1', width: 16, height: 16 },
+  },
+  // Sequential MCP skill flow
+  {
+    id: 'e-ext-ont',
+    source: 'clinical_extractor',
+    target: 'ontology_traverser',
+    label: 'obs:return',
+    labelStyle: { fill: '#64748b', fontSize: 8, fontWeight: 400 },
+    labelBgStyle: { fill: '#1e293b', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2] as [number, number],
+    style: { stroke: '#475569', strokeWidth: 1.5, strokeDasharray: '6 3' },
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#475569', width: 12, height: 12 },
+  },
+  {
+    id: 'e-ont-gov',
+    source: 'ontology_traverser',
+    target: 'opa_verifier',
+    label: 'obs:return',
+    labelStyle: { fill: '#64748b', fontSize: 8, fontWeight: 400 },
+    labelBgStyle: { fill: '#1e293b', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2] as [number, number],
+    style: { stroke: '#475569', strokeWidth: 1.5, strokeDasharray: '6 3' },
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#475569', width: 12, height: 12 },
+  },
+  {
+    id: 'e-gov-syn',
+    source: 'opa_verifier',
+    target: 'synthesizer',
+    label: 'obs:return',
+    labelStyle: { fill: '#64748b', fontSize: 8, fontWeight: 400 },
+    labelBgStyle: { fill: '#1e293b', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2] as [number, number],
+    style: { stroke: '#475569', strokeWidth: 1.5, strokeDasharray: '6 3' },
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#475569', width: 12, height: 12 },
+  },
 ];
 
 export default function DAGCanvas({ agentNodes }: DAGCanvasProps) {
   const nodes: Node[] = useMemo(() =>
     agentNodes.map(n => {
       const style = STATUS_STYLES[n.status] || STATUS_STYLES.idle;
+      const isSupervisor = n.id === 'supervisor';
       return {
         id: n.id,
         type: 'default',
         position: NODE_POSITIONS[n.id] || { x: 0, y: 0 },
         data: {
           label: (
-            <div className="flex flex-col items-center gap-1 py-1">
-              <span className="text-xs font-semibold text-gray-100">{n.label}</span>
+            <div className="flex flex-col items-center gap-1 py-1 px-2">
+              {isSupervisor && (
+                <span className="text-[9px] text-indigo-400 uppercase tracking-widest font-medium mb-0.5">
+                  Control Plane
+                </span>
+              )}
+              <span className={`text-xs font-semibold text-gray-100 ${isSupervisor ? 'text-sm' : ''}`}>
+                {n.label}
+              </span>
               <span className={`text-[10px] uppercase tracking-wider ${
                 n.status === 'active' ? 'text-green-400' :
                 n.status === 'completed' ? 'text-blue-400' :
@@ -58,12 +140,12 @@ export default function DAGCanvas({ agentNodes }: DAGCanvasProps) {
           ),
         },
         style: {
-          width: 200,
+          width: isSupervisor ? 220 : 180,
           borderWidth: 2,
           borderColor: style.border,
           backgroundColor: style.bg,
           boxShadow: style.shadow,
-          borderRadius: 8,
+          borderRadius: isSupervisor ? 12 : 8,
           transition: 'all 0.3s ease',
         },
       };
@@ -77,6 +159,7 @@ export default function DAGCanvas({ agentNodes }: DAGCanvasProps) {
         nodes={nodes}
         edges={EDGES}
         fitView
+        fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
         nodesDraggable={false}
         nodesConnectable={false}

@@ -6,17 +6,18 @@ logger = logging.getLogger(__name__)
 
 
 class HybridRetriever:
-    def __init__(self, qdrant_host: str = None, neo4j_verifier=None, embed_model: str = "all-MiniLM-L6-v2"):
+    def __init__(self, qdrant_host: str = None, neo4j_verifier=None, embed_model: str = None):
         self.qdrant_host = qdrant_host or os.getenv("QDRANT_HOST", "http://localhost:6333")
         self.neo4j = neo4j_verifier
-        self.embed_model_name = embed_model
+        self.embed_model_name = embed_model or os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        self.embed_device = os.getenv("EMBEDDING_DEVICE", "cpu")
         self._encoder = None
         self._qdrant_client = None
 
     def _get_encoder(self):
         if self._encoder is None:
             from sentence_transformers import SentenceTransformer
-            self._encoder = SentenceTransformer(self.embed_model_name)
+            self._encoder = SentenceTransformer(self.embed_model_name, device=self.embed_device)
         return self._encoder
 
     def _get_qdrant(self):
