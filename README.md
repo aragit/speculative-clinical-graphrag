@@ -49,15 +49,9 @@ Standard "GraphRAG" and agentic frameworks suffer from a **Cognitive Control Gap
 2. **LLM as Interface (Demoted Subroutine)**: The fine-tuned LLM (`MedGemma-4B-IT` / `vLLM`) is demoted from "The Brain" to a bounded Layer 4 subroutine responsible only for structured extraction and natural language synthesis.
 3. **Zero-Trust Governance**: No diagnostic hypothesis or treatment pathway reaches a clinician without passing structural Cypher proof validation and external Open Policy Agent (OPA) safety checks.
 
-```
-  STANDARD AGENTIC RAG (Probabilistic Latent Reasoning)
-  User Query ──► LLM Router (Latent Space) ──► Tool / Graph Dump ──► LLM Output (Unconstrained)
-
-  SPECULATIVE CLINICAL GRAPHRAG (Graph-Driven Neuro-Symbolic)
-  User Query ──► Intent Planner ──► Guided Graph Traversal ──► Symbolic Rules & Constraints
-                                                              │
-  Clinician ◄── Verification Gate ◄── LLM Synthesis (Translator) ◄─────────┘
-```
+<p align="center">
+  <img src="assets/graphrag.png" alt="Clinical GraphRAG Flow Diagram" width="100%">
+</p>
 
 ---
 
