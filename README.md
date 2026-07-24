@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <b>A Deterministic Type 2 Neuro-Symbolic Clinical Decision Support System — Every diagnostic path is symbolically constrained, graph-proven, and OPA-policy verified before natural language synthesis.</b>
+  <b>A Neuro-Symbolic Clinical Decision Support System — Every diagnostic path is symbolically constrained, graph-proven, and OPA-policy verified before natural language synthesis.</b>
 </p>
 
 ---
