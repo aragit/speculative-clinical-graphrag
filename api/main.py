@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from api.schemas import (
     SpeculateRequest, SpeculateResponse, ReasoningTraceResponse,
@@ -13,6 +14,7 @@ from api.dependencies import get_neo4j_verifier, get_symbolic_verifier, get_opa_
 from api.middleware import RequestIDMiddleware, APIKeyMiddleware, RateLimitMiddleware
 from core.workflow import SpeculativeGraphRAG
 from core.llm_backend import MockLLMBackend
+from core.mas_streamer import MASStreamer
 
 logger = logging.getLogger(__name__)
 
@@ -215,4 +217,36 @@ async def override_trace(request: OverrideRequest):
         clinician_notes=request.clinician_notes,
         surface_output=trace.get("surface_output"),
         modified_path=trace.get("modified_path"),
+    )
+
+
+@app.post("/v1/chat/stream")
+async def stream_clinical_reasoning(request: SpeculateRequest):
+    """SSE streaming endpoint that emits MAS events as the multi-agent workflow executes."""
+    streamer = MASStreamer(workflow=rag)
+
+    async def event_generator():
+        try:
+            async for event in streamer.stream(
+                patient_note=request.patient_note,
+                patient_context=request.patient_context,
+            ):
+                yield f"data: {event.model_dump_json()}\n\n"
+        except Exception as e:
+            logger.exception("SSE stream failed")
+            error_event = json.dumps({
+                "event_type": "ERROR",
+                "detail": str(e),
+            })
+            yield f"data: {error_event}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

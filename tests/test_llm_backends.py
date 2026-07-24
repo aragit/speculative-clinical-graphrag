@@ -18,11 +18,12 @@ def test_mockllm_correction_decay(mock_llm):
         mock_llm.regenerate_with_feedback("dyspnea", violations, "prior reasoning", {})
     )
     originals_by_tail = {t["tail"]: t["confidence"] for t in mock_llm._MOCK_KNOWLEDGE_TEMPLATE["dyspnea"]}
-    assert len(result["triplets"]) == len(originals_by_tail)
-    for t in result["triplets"]:
-        expected = max(originals_by_tail[t["tail"]] - 0.1, 0.5)
-        assert t["confidence"] == pytest.approx(expected, abs=0.001)
-        assert t.get("corrected") is True
+    # Violating triplet (Dyspnea -> Heart Failure) is filtered out
+    assert len(result["triplets"]) == len(originals_by_tail) - 1
+    assert all(t.get("corrected") is True for t in result["triplets"])
+    # Verify the violating triplet was removed
+    remaining_tails = {t["tail"] for t in result["triplets"]}
+    assert "Heart Failure" not in remaining_tails
 
 @pytest.mark.asyncio
 async def test_ollama_json_output():

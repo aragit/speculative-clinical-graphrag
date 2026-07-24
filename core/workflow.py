@@ -158,6 +158,20 @@ class SpeculativeGraphRAG:
             state["patient_note"], violations, prior, state.get("patient_context")
         )
         triplets = result.get("triplets", [])
+
+        # Defense-in-depth: explicitly filter any remaining violating triplets
+        if violations and triplets:
+            violating_heads_tails = set()
+            for v in violations:
+                t = v.get("triplet", {})
+                if t.get("head") and t.get("tail"):
+                    violating_heads_tails.add((t["head"], t["tail"]))
+                    violating_heads_tails.add((t["tail"], t["head"]))
+            triplets = [
+                t for t in triplets
+                if (t.get("head"), t.get("tail")) not in violating_heads_tails
+            ]
+
         reasoning = result.get("reasoning", "")
         iteration = state.get("iteration_count", 1) + 1
         self._log(state, "correct_differential", f"corrected: {len(triplets)} edges (attempt {iteration})")

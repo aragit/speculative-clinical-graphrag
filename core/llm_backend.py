@@ -138,6 +138,8 @@ class MockLLMBackend(LLMBackend):
         ],
     }
 
+    _MEDICATION_KEYWORDS = {"warfarin", "aspirin", "metformin", "insulin", "furosemide"}
+
     def __init__(self, seed: int = 42):
         import copy
         self.seed = seed
@@ -164,11 +166,41 @@ class MockLLMBackend(LLMBackend):
         for keyword, paths in self.MOCK_KNOWLEDGE.items():
             if keyword in note_lower:
                 triplets.extend(copy.deepcopy(paths))
-        if triplets:
+
+        # Filter out violating triplets based on violation feedback
+        if violations and triplets:
+            violating_pairs = set()
+            for v in violations:
+                t = v.get("triplet", {})
+                if t.get("head") and t.get("tail"):
+                    violating_pairs.add((t["head"], t["relation"], t["tail"]))
+                    violating_pairs.add((t["tail"], t["relation"], t["head"]))
+
+            # Also identify drug-condition pairs from violation reasons
+            for v in violations:
+                reason = v.get("reason", "")
+                if "Drug interaction" in reason or "contraindicated" in reason.lower():
+                    # Extract drug names from the violation triplet
+                    t = v.get("triplet", {})
+                    if t.get("head") and t.get("tail"):
+                        # Block any triplet involving these two entities
+                        for other_triplet in triplets[:]:
+                            if (other_triplet["head"] == t["head"] and other_triplet["tail"] == t["tail"]) or \
+                               (other_triplet["head"] == t["tail"] and other_triplet["tail"] == t["head"]):
+                                violating_pairs.add((other_triplet["head"], other_triplet.get("relation", ""), other_triplet["tail"]))
+
+            filtered = []
             for t in triplets:
-                t["confidence"] = max(t.get("confidence", 0.8) - 0.1, 0.5)
-                t["corrected"] = True
-            reasoning = "MockLLM correction attempt"
+                triplet_key = (t["head"], t.get("relation", ""), t["tail"])
+                reverse_key = (t["tail"], t.get("relation", ""), t["head"])
+                if triplet_key not in violating_pairs and reverse_key not in violating_pairs:
+                    filtered.append(t)
+                    t["confidence"] = max(t.get("confidence", 0.8) - 0.1, 0.5)
+                    t["corrected"] = True
+            triplets = filtered
+
+        if triplets:
+            reasoning = f"MockLLM correction: filtered {len(violations)} violation(s), {len(triplets)} triplets remain"
         else:
             triplets = []
             reasoning = "MockLLM: no valid matches after correction, forcing escalation."
@@ -178,7 +210,7 @@ class MockLLMBackend(LLMBackend):
         note_lower = patient_note.lower()
         symptoms = []
         for keyword in self.MOCK_KNOWLEDGE:
-            if keyword in note_lower:
+            if keyword in note_lower and keyword not in self._MEDICATION_KEYWORDS:
                 symptoms.append({"term": keyword.title(), "confidence": 0.95})
         return {"symptoms": symptoms}
 

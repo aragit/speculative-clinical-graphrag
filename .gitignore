@@ -18,3 +18,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 *.db
+.mimocode/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
