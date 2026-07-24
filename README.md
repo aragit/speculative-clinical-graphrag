@@ -50,12 +50,14 @@ Standard "GraphRAG" and agentic frameworks suffer from a **Cognitive Control Gap
 3. **Zero-Trust Governance**: No diagnostic hypothesis or treatment pathway reaches a clinician without passing structural Cypher proof validation and external Open Policy Agent (OPA) safety checks.
 
 ```
-  STANDARD AGENTIC RAG (Probabilistic Latent Reasoning)
-  User Query ──► LLM Router (Latent Space) ──► Tool / Graph Dump ──► LLM Output (Unconstrained)
+  **STANDARD AGENTIC RAG (Probabilistic Latent Reasoning)**:
 
-  SPECULATIVE CLINICAL GRAPHRAG (Graph-Driven Neuro-Symbolic)
+  [] User Query ──► LLM Router (Latent Space) ──► Tool / Graph Dump ──► LLM Output (Unconstrained)
+
+  **CLINICAL GRAPHRAG (Graph-Driven Neuro-Symbolic)**:
+
   User Query ──► Intent Planner ──► Guided Graph Traversal ──► Symbolic Rules & Constraints
-                                                              │
+                                                                           │
   Clinician ◄── Verification Gate ◄── LLM Synthesis (Translator) ◄─────────┘
 ```
 
@@ -110,35 +112,35 @@ The codebase decouples execution into six single-responsibility layers:
 +---------------------------------------------+-------------------------------------+
                                               v
 +-----------------------------------------------------------------------------------+
-| 2. ACTIVE KNOWLEDGE TRAVERSAL LAYER (core/retrieval.py & graph/)                  |
+| 2. ACTIVE KNOWLEDGE TRAVERSAL LAYER (core/retrieval.py & graph/)                      |
 |    - Plan-guided Cypher graph traversal (Symptoms -> Conditions -> Contraindications) |
-|    - Qdrant hybrid vector extraction for unstructured EHR context                  |
+|    - Qdrant hybrid vector extraction for unstructured EHR context                     |
 +---------------------------------------------+-------------------------------------+
                                               v
 +-----------------------------------------------------------------------------------+
-| 3. SYMBOLIC CONSTRAINT & REASONING LAYER (agents/reasoner/ & core/verification.py)|
+| 3. SYMBOLIC CONSTRAINT & REASONING LAYER (agents/reasoner/ & core/verification.py) |
 |    - Deterministic elimination of clinical impossibilities (rules_engine.py)       |
 |    - Conflict identification (drug-symptom, allergy-condition)                     |
-|    - Bayesian posterior confidence updates & path elimination                     |
+|    - Bayesian posterior confidence updates & path elimination                      |
 +---------------------------------------------+-------------------------------------+
                                               v
 +-----------------------------------------------------------------------------------+
-| 4. NEURAL EXPRESSION & SYNTHESIS LAYER (agents/synthesizer/ & core/llm_backend.py)|
+| 4. NEURAL EXPRESSION & SYNTHESIS LAYER (agents/synthesizer/ & core/llm_backend.py)   |
 |    - Invokes fine-tuned LLM (MedGemma-4B-IT / vLLM / Ollama) strictly as subroutine  |
-|    - Converts validated symbolic reasoning paths into clear clinical briefings    |
+|    - Converts validated symbolic reasoning paths into clear clinical briefings       |
 +---------------------------------------------+-------------------------------------+
                                               v
 +-----------------------------------------------------------------------------------+
 | 5. DETERMINISTIC GOVERNANCE LAYER (core/verification_layer.py & infra/opa/)       |
 |    - OPA/Rego sidecar zero-trust policy verification (<5ms)                       |
 |    - Native Python fallback validator (<50ms under OPA timeout)                   |
-|    - Structural Cypher proof validation before final response delivery             |
+|    - Structural Cypher proof validation before final response delivery            |
 +---------------------------------------------+-------------------------------------+
                                               v
 +-----------------------------------------------------------------------------------+
 | 6. MEMORY SUBSTRATE & AUDIT LEDGER (core/memory.py & storage/)                    |
 |    - Redis Streams for state checkpointing (<15ms hydration)                      |
-|    - Append-only event log for 100% deterministic replayability                  |
+|    - Append-only event log for 100% deterministic replayability                   |
 +-----------------------------------------------------------------------------------+
 ```
 
