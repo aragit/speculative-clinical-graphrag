@@ -360,3 +360,46 @@ async def apply_rules():
         result["symbolic_rules_loaded"] = new_count
 
     return result
+
+
+@app.post("/v1/admin/policy/train")
+async def train_policy(admin_key: str):
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+    if not rag.enable_neural_policy:
+        raise HTTPException(status_code=400, detail="Neural policy not enabled")
+
+    from core.rlhf_trainer import RLHFTrainer
+    trainer = RLHFTrainer(rag.neural_policy)
+
+    exported = trainer.export_dataset()
+    result = trainer.train(epochs=100)
+
+    if result["status"] == "trained":
+        trainer.load_model()
+        rag.neural_policy.load_trained_weights(trainer.weights, trainer.bias)
+
+    return {
+        "exported_examples": exported,
+        "training_result": result,
+    }
+
+
+@app.get("/v1/admin/policy/evaluate")
+async def evaluate_policy(admin_key: str):
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or admin_key != expected:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+    from core.rlhf_trainer import RLHFTrainer
+    trainer = RLHFTrainer(rag.neural_policy)
+
+    test_cases = [
+        {"features": r["features"], "expected_action": r["actual"]}
+        for r in rag.neural_policy.history
+    ]
+
+    result = trainer.evaluate_vs_static(test_cases)
+    return result

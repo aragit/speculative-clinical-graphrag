@@ -1,3 +1,4 @@
+import math
 import time
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel
@@ -21,16 +22,14 @@ class NeuralPolicyNetwork:
     def __init__(self, enable_learning: bool = True):
         self.enable_learning = enable_learning
         self.history: List[Dict] = []
+        self._trained_weights: Optional[Dict] = None
+        self._trained_bias: Optional[Dict] = None
 
     def predict(self, state: Dict) -> RoutingDecision:
         features = self._extract_features(state)
 
-        complexity_score = self._complexity_score(features)
-        risk_score = self._risk_score(features)
-        uncertainty_score = self._uncertainty_score(features)
-
         # Type 2 safety invariant: symbolic unsafe + high risk → escalate
-        if not features.get("symbolic_safe", True) and risk_score > 0.6:
+        if not features.get("symbolic_safe", True) and self._risk_score(features) > 0.6:
             return RoutingDecision(
                 action="escalate",
                 confidence=0.9,
@@ -45,7 +44,36 @@ class NeuralPolicyNetwork:
                 reason="Type 2 invariant: max iterations reached",
             )
 
-        # Neural heuristic routing
+        # Use trained weights if available
+        if self._trained_weights and self._trained_bias:
+            actions = {"synthesize", "correct_differential", "escalate"}
+            scores = {}
+            for action in actions:
+                if action not in self._trained_weights:
+                    continue
+                score = self._trained_bias.get(action, 0.0)
+                for k, v in features.items():
+                    score += self._trained_weights[action].get(k, 0.0) * v
+                scores[action] = score
+
+            if scores:
+                max_score = max(scores.values())
+                exp_scores = {a: math.exp(s - max_score) for a, s in scores.items()}
+                sum_exp = sum(exp_scores.values())
+                best_action = max(scores, key=scores.get)
+                confidence = exp_scores[best_action] / sum_exp
+
+                return RoutingDecision(
+                    action=best_action,
+                    confidence=confidence,
+                    reason=f"Trained model prediction (score: {scores[best_action]:.3f})",
+                )
+
+        # Fallback: heuristic routing
+        complexity_score = self._complexity_score(features)
+        risk_score = self._risk_score(features)
+        uncertainty_score = self._uncertainty_score(features)
+
         if complexity_score < 0.3 and risk_score < 0.3 and features.get("is_safe", False):
             return RoutingDecision(
                 action="synthesize",
@@ -60,12 +88,17 @@ class NeuralPolicyNetwork:
                 reason="High uncertainty, attempt correction",
             )
 
-        # Default: escalate if ambiguous
         return RoutingDecision(
             action="escalate",
             confidence=0.6,
             reason="Ambiguous case: complexity/risk/uncertainty in middle zone",
         )
+
+    def load_trained_weights(self, weights: Dict, bias: Dict):
+        """Load weights from RLHFTrainer. Updates heuristic scoring."""
+        self._trained_weights = weights
+        self._trained_bias = bias
+        logger.info("Loaded trained weights into neural policy")
 
     def _extract_features(self, state: Dict) -> Dict:
         symptoms = state.get("extracted_symptoms", [])

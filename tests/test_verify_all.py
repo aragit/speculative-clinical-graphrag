@@ -290,10 +290,10 @@ class Test04_ApiIntegrationClaims:
         middleware_names = [m.cls.__name__ for m in app.user_middleware]
         assert "APIKeyMiddleware" in middleware_names or len(middleware_names) > 0,             "API should have middleware registered"
 
-    def test_api_version_is_0_3_0(self):
-        """API version should be 0.3.0, not 0.1.0."""
+    def test_api_version_is_0_6_0(self):
+        """API version should be 0.6.0."""
         from api.main import app
-        assert app.version == "0.3.0",             f"API version should be 0.3.0, got {app.version}"
+        assert app.version == "0.6.0",             f"API version should be 0.6.0, got {app.version}"
 
     def test_api_health_has_redis_probe(self):
         """Health endpoint should check Redis connectivity."""

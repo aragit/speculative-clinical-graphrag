@@ -11,7 +11,7 @@ def test_health_probes():
     assert "neo4j_connected" in data
     assert "qdrant_connected" in data
     assert "opa_connected" in data
-    assert data["version"] == "0.3.0"
+    assert data["version"] == "0.6.0"
 
 def test_speculate_endpoint():
     response = client.post("/v1/speculate", json={"patient_note": "Patient has dyspnea"})
