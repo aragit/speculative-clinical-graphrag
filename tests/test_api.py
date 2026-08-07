@@ -29,3 +29,20 @@ def test_speculate_escalation():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "escalated"
+
+
+def test_backend_metrics_tracking():
+    r1 = client.post("/v1/speculate", json={"patient_note": "Patient has dyspnea"})
+    assert r1.status_code == 200
+    r2 = client.post("/v1/speculate", json={"patient_note": "Patient has chest pain"})
+    assert r2.status_code == 200
+
+    metrics_resp = client.get("/v1/metrics/backends")
+    assert metrics_resp.status_code == 200
+    data = metrics_resp.json()
+    assert "backends" in data
+    assert "default_backend" in data
+    assert "mock" in data["backends"] or data["backends"]
+    mock_metrics = data["backends"].get("mock", {})
+    assert mock_metrics["calls"] >= 2
+    assert mock_metrics["avg_latency_ms"] >= 0.0

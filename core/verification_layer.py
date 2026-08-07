@@ -2,6 +2,9 @@ from typing import List, Dict, Optional
 from neo4j import GraphDatabase
 import os
 import logging
+import asyncio
+import yaml
+from core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -347,13 +350,37 @@ def lookup_all_by_symptoms(symptoms: List[str]) -> Dict[str, List[Dict]]:
 
 
 class Neo4jVerifier:
-    def __init__(self, uri: str = None, auth: tuple = None, max_pool_size: int = 50):
+    def __init__(self, uri: str = None, auth: tuple = None, max_pool_size: int = 50, query_timeout: float = None):
         uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
         auth = auth or (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "speculative123"))
         self.driver = GraphDatabase.driver(uri, auth=auth, max_connection_pool_size=max_pool_size)
+        self.query_timeout = query_timeout if query_timeout is not None else float(os.getenv("NEO4J_QUERY_TIMEOUT", "5.0"))
+        self.cb = CircuitBreaker("neo4j", failure_threshold=3, recovery_timeout=30.0)
 
     def close(self):
         self.driver.close()
+
+    async def validate_async(self, proposed_path: List[Dict]) -> Dict:
+        """Async-safe validation with timeout and circuit breaker."""
+        try:
+            return await self.cb.call(self._validate_async_impl, proposed_path)
+        except CircuitBreakerOpenError:
+            logger.error("Neo4j circuit breaker OPEN; falling back to in-memory validation")
+            result = self._validate_in_memory(proposed_path)
+            result["mode"] = "degraded"
+            return result
+
+    async def _validate_async_impl(self, proposed_path: List[Dict]) -> Dict:
+        loop = asyncio.get_running_loop()
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, self.validate, proposed_path),
+            timeout=self.query_timeout + 2.0
+        )
+
+    async def seed_mock_ontology_async(self, scale: int = 100) -> None:
+        """Async-safe seeding."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.seed_mock_ontology, scale)
 
     def validate(self, proposed_path: List[Dict]) -> Dict:
         if not proposed_path:
@@ -363,14 +390,16 @@ class Neo4jVerifier:
                 "violations": [{"reason": "Empty path: no diagnostic entities extracted"}],
                 "total_checked": 0,
                 "confidence_decay": 0.0,
+                "mode": "symbolic_only",
             }
-        # Dev mode: if Neo4j is unreachable, validate against in-memory EDGES list
         try:
             with self.driver.session() as session:
-                session.run("RETURN 1")
+                session.run("RETURN 1", timeout=self.query_timeout)
         except Exception as e:
-            logger.warning(f"Neo4j unreachable ({e}). Falling back to in-memory validation (DEV MODE).")
-            return self._validate_in_memory(proposed_path)
+            logger.warning(f"Neo4j unreachable ({e}). Falling back to in-memory validation (DEGRADED MODE).")
+            result = self._validate_in_memory(proposed_path)
+            result["mode"] = "degraded"
+            return result
         violations = []
         valid_edges = []
         for triplet in proposed_path:
@@ -394,6 +423,7 @@ class Neo4jVerifier:
             "violations": violations,
             "total_checked": len(proposed_path),
             "confidence_decay": decay,
+            "mode": "full",
         }
 
     def _validate_in_memory(self, proposed_path: List[Dict]) -> Dict:
@@ -419,6 +449,7 @@ class Neo4jVerifier:
             "violations": violations,
             "total_checked": len(proposed_path),
             "confidence_decay": decay,
+            "mode": "degraded",
         }
 
     def _check_edge_exists(self, head: str, relation: str, tail: str, head_cui: Optional[str] = None, tail_cui: Optional[str] = None) -> bool:
@@ -436,7 +467,7 @@ class Neo4jVerifier:
             params = {"head": head, "relation": relation, "tail": tail}
         try:
             with self.driver.session() as session:
-                result = session.run(query, **params)
+                result = session.run(query, **params, timeout=self.query_timeout)
                 record = result.single()
                 return record["exists"] if record else False
         except Exception as e:
@@ -446,57 +477,149 @@ class Neo4jVerifier:
     def seed_mock_ontology(self, scale: int = 100):
         logger.warning("MOCK_MODE: Seeding programmatically generated mock ontology. NOT real SNOMED-CT/UMLS.")
         with self.driver.session() as session:
-            session.run("CREATE CONSTRAINT concept_cui IF NOT EXISTS FOR (c:Concept) REQUIRE c.cui IS UNIQUE")
+            session.run("CREATE CONSTRAINT concept_cui IF NOT EXISTS FOR (c:Concept) REQUIRE c.cui IS UNIQUE", timeout=self.query_timeout)
             for label, cui, semantic_tag in ALL_CONCEPTS:
                 session.run(
                     "MERGE (c:Concept {cui: $cui}) ON CREATE SET c.label = $label, c.semantic_tag = $tag",
-                    cui=cui, label=label, tag=semantic_tag
+                    cui=cui, label=label, tag=semantic_tag,
+                    timeout=self.query_timeout,
                 )
             for head, rel_type, tail in EDGES:
                 session.run("""
                     MATCH (h:Concept {label: $head}), (t:Concept {label: $tail})
                     MERGE (h)-[:RELATION {type: $rel}]->(t)
-                """, head=head, tail=tail, rel=rel_type)
+                """, head=head, tail=tail, rel=rel_type, timeout=self.query_timeout)
         logger.info(f"Mock ontology seeded: {len(ALL_CONCEPTS)} concepts, {len(EDGES)} edges.")
 
 
 class SymbolicVerifier:
-    DRUG_INTERACTIONS = {
-        ("Warfarin", "Aspirin"): "Major bleed risk: anticoagulant + antiplatelet",
-        ("Warfarin", "Ibuprofen"): "Major bleed risk: anticoagulant + NSAID",
-        ("Warfarin", "Heparin"): "Dual anticoagulation without indication",
-        ("Amiodarone", "Digoxin"): "Additive bradycardia / toxicity risk",
-        ("Metformin", "Severe Renal Impairment"): "Lactic acidosis risk",
-        ("ACE Inhibitor", "Angioedema"): "Contraindicated if history of ACEi angioedema",
+    _HARDCODED_DRUG_INTERACTIONS = {
+        ("Warfarin", "Aspirin"): {"severity": "major", "reason": "Major bleed risk: anticoagulant + antiplatelet"},
+        ("Warfarin", "Ibuprofen"): {"severity": "major", "reason": "Major bleed risk: anticoagulant + NSAID"},
+        ("Warfarin", "Heparin"): {"severity": "major", "reason": "Dual anticoagulation without indication"},
+        ("Amiodarone", "Digoxin"): {"severity": "major", "reason": "Additive bradycardia / toxicity risk"},
+        ("Metformin", "Severe Renal Impairment"): {"severity": "contraindicated", "reason": "Lactic acidosis risk"},
+        ("ACE Inhibitor", "Angioedema"): {"severity": "contraindicated", "reason": "Contraindicated if history of ACEi angioedema"},
     }
 
-    AGE_CONTRAINDICATIONS = {
+    _HARDCODED_AGE_CONTRAINDICATIONS = {
         "Aspirin": {"max_age": 12, "reason": "Reye syndrome risk in children"},
     }
+
+    def __init__(self, rules_dir: str = None):
+        self.rules_dir = rules_dir or os.getenv("SAFETY_RULES_DIR", "config/safety_rules")
+        self.drug_interactions = {}
+        self.age_contraindications = {}
+        self.allergy_contraindications = {}
+        self.pregnancy_contraindications = []
+        self._load_rules()
+
+    def _load_rules(self):
+        di_path = os.path.join(self.rules_dir, "drug_interactions.yaml")
+        if os.path.exists(di_path):
+            with open(di_path) as f:
+                data = yaml.safe_load(f)
+                for rule in data.get("rules", []):
+                    drugs = rule["drugs"]
+                    for i in range(len(drugs)):
+                        for j in range(i + 1, len(drugs)):
+                            self.drug_interactions[(drugs[i], drugs[j])] = rule
+                            self.drug_interactions[(drugs[j], drugs[i])] = rule
+        else:
+            self.drug_interactions = dict(self._HARDCODED_DRUG_INTERACTIONS)
+
+        al_path = os.path.join(self.rules_dir, "allergy_contraindications.yaml")
+        if os.path.exists(al_path):
+            with open(al_path) as f:
+                data = yaml.safe_load(f)
+                for rule in data.get("rules", []):
+                    self.allergy_contraindications[rule["allergen"]] = rule
+
+        pr_path = os.path.join(self.rules_dir, "pregnancy_contraindications.yaml")
+        if os.path.exists(pr_path):
+            with open(pr_path) as f:
+                data = yaml.safe_load(f)
+                self.pregnancy_contraindications = data.get("rules", [])
+
+        ag_path = os.path.join(self.rules_dir, "age_contraindications.yaml")
+        if os.path.exists(ag_path):
+            with open(ag_path) as f:
+                data = yaml.safe_load(f)
+                for rule in data.get("rules", []):
+                    drug = rule.get("drug", rule.get("allergen"))
+                    if drug:
+                        self.age_contraindications[drug] = rule
+        else:
+            self.age_contraindications = dict(self._HARDCODED_AGE_CONTRAINDICATIONS)
+
+    def hot_reload(self) -> int:
+        """Reload rules from YAML without restarting. Returns count of loaded rules."""
+        before = len(self.drug_interactions) + len(self.allergy_contraindications) + len(self.pregnancy_contraindications) + len(self.age_contraindications)
+        self.drug_interactions = {}
+        self.allergy_contraindications = {}
+        self.pregnancy_contraindications = []
+        self.age_contraindications = {}
+        self._load_rules()
+        after = len(self.drug_interactions) + len(self.allergy_contraindications) + len(self.pregnancy_contraindications) + len(self.age_contraindications)
+        logger.info(f"SymbolicVerifier hot reload: {after} rules loaded (was {before})")
+        return after
 
     def validate(self, proposed_path: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
         violations = []
         valid_edges = []
         patient_context = patient_context or {}
         age = patient_context.get("age")
+        allergies = {a.lower() for a in patient_context.get("allergies", [])}
+        is_pregnant = patient_context.get("pregnancy_status") in ("pregnant", True, "yes")
 
         for triplet in proposed_path:
             head = triplet.get("head", "")
             tail = triplet.get("tail", "")
             relation = triplet.get("relation", "")
-            key = (head, tail)
-            reverse_key = (tail, head)
 
-            if key in self.DRUG_INTERACTIONS or reverse_key in self.DRUG_INTERACTIONS:
-                msg = self.DRUG_INTERACTIONS.get(key) or self.DRUG_INTERACTIONS.get(reverse_key)
-                violations.append({"triplet": triplet, "reason": f"Symbolic rule: {msg}"})
+            # Drug interaction check
+            key = (head, tail)
+            if key in self.drug_interactions:
+                rule = self.drug_interactions[key]
+                violations.append({
+                    "triplet": triplet,
+                    "reason": f"Symbolic rule [{rule['severity']}]: {rule['reason']}",
+                })
                 continue
 
-            if age is not None and head in self.AGE_CONTRAINDICATIONS:
-                rule = self.AGE_CONTRAINDICATIONS[head]
-                if age < rule["max_age"]:
-                    violations.append({"triplet": triplet, "reason": f"Age rule: {rule['reason']}"})
+            # Age contraindication
+            if age is not None and head in self.age_contraindications:
+                rule = self.age_contraindications[head]
+                if age < rule.get("max_age", 0):
+                    violations.append({
+                        "triplet": triplet,
+                        "reason": f"Age rule: {rule['reason']}",
+                    })
                     continue
+
+            # Allergy check
+            if head in self.allergy_contraindications or tail in self.allergy_contraindications:
+                allergen = head if head in self.allergy_contraindications else tail
+                rule = self.allergy_contraindications[allergen]
+                if allergen.lower() in allergies:
+                    violations.append({
+                        "triplet": triplet,
+                        "reason": f"Allergy rule: {rule['reason']}",
+                    })
+                    continue
+
+            # Pregnancy check
+            if is_pregnant:
+                for rule in self.pregnancy_contraindications:
+                    if head in rule.get("drugs", []) or tail in rule.get("drugs", []):
+                        violations.append({
+                            "triplet": triplet,
+                            "reason": f"Pregnancy rule: {rule['reason']}",
+                        })
+                        break
+                else:
+                    valid_edges.append(triplet)
+                continue
 
             valid_edges.append(triplet)
 
@@ -514,8 +637,19 @@ class OPAClient:
         self.opa_url = opa_url or os.getenv("OPA_URL", "http://localhost:8181/v1/data/clinical")
         import httpx
         self.client = httpx.AsyncClient(timeout=10.0)
+        self.cb = CircuitBreaker("opa", failure_threshold=3, recovery_timeout=15.0)
 
     async def evaluate(self, payload: Dict) -> Dict:
+        try:
+            return await self.cb.call(self._evaluate_impl, payload)
+        except CircuitBreakerOpenError:
+            logger.error("OPA circuit breaker OPEN; FAIL-CLOSED")
+            return {
+                "allow": False,
+                "violations": [{"reason": "OPA circuit breaker OPEN", "triplet": {}}],
+            }
+
+    async def _evaluate_impl(self, payload: Dict) -> Dict:
         try:
             response = await self.client.post(
                 f"{self.opa_url}/allow",
@@ -525,14 +659,30 @@ class OPAClient:
             data = response.json()
             result = data.get("result")
             if result is None:
-                logger.warning("OPA returned no result (policy not loaded). Defaulting to allow=True.")
-                return {"allow": True, "violations": []}
+                logger.error("OPA returned no result (policy not loaded). FAIL-CLOSED: denying request.")
+                return {
+                    "allow": False,
+                    "violations": [{"reason": "OPA returned no result (policy not loaded)", "triplet": {}}],
+                }
             return {"allow": bool(result), "violations": []}
         except Exception as e:
-            logger.warning(f"OPA unreachable: {e}. Defaulting to allow=True (dev mode).")
-            return {"allow": True, "violations": []}
+            logger.error(f"OPA unreachable: {e}. FAIL-CLOSED: denying request.")
+            return {
+                "allow": False,
+                "violations": [{"reason": f"OPA policy engine unreachable: {e}", "triplet": {}}],
+            }
 
     async def evaluate_tool_execution(self, tool_name: str, payload: Dict) -> Dict:
+        try:
+            return await self.cb.call(self._evaluate_tool_execution_impl, tool_name, payload)
+        except CircuitBreakerOpenError:
+            logger.error("OPA circuit breaker OPEN; FAIL-CLOSED (tool exec)")
+            return {
+                "allow": False,
+                "violations": [{"reason": "OPA circuit breaker OPEN (tool exec)", "triplet": {}}],
+            }
+
+    async def _evaluate_tool_execution_impl(self, tool_name: str, payload: Dict) -> Dict:
         try:
             response = await self.client.post(
                 f"{self.opa_url}/tool_execution/allow",
@@ -542,5 +692,8 @@ class OPAClient:
             data = response.json()
             return {"allow": data.get("result", False), "violations": []}
         except Exception as e:
-            logger.warning(f"OPA tool eval unreachable: {e}. Defaulting to allow=True (dev mode).")
-            return {"allow": True, "violations": []}
+            logger.error(f"OPA tool eval unreachable: {e}. FAIL-CLOSED: denying tool execution.")
+            return {
+                "allow": False,
+                "violations": [{"reason": f"OPA tool policy unreachable: {e}", "triplet": {}}],
+            }

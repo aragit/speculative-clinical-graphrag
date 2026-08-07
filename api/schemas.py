@@ -7,7 +7,7 @@ class SpeculateRequest(BaseModel):
     patient_note: str = Field(..., min_length=1, max_length=10000)
     patient_context: Optional[Dict] = Field(default=None, description="Age, gender, allergies, current meds")
     preferred_backend: Optional[Literal["mock", "ollama", "deepseek_r1", "medgemma_4b_it"]] = Field(default=None)
-
+    
 class SpeculateResponse(BaseModel):
     proposed_path: List[Dict]
     validation: Dict
@@ -17,6 +17,22 @@ class SpeculateResponse(BaseModel):
     reasoning_trace: Optional[str] = Field(default=None, description="Clinician-reviewable reasoning")
     retrieval_sources: Optional[List[Dict]] = Field(default=None, description="Hybrid RAG source attribution")
     audit_log: Optional[List[Dict]] = Field(default=None)
+    validation_mode: Literal["full", "degraded", "symbolic_only"] = Field(
+        default="symbolic_only",
+        description="Validation layer status: full (Neo4j+Symbolic+OPA), degraded (in-memory+Symbolic+OPA), symbolic_only (no graph)"
+    )
+    reasoning_history: Optional[List[Dict]] = Field(
+        default=None,
+        description="Full chain of reasoning across all correction iterations",
+    )
+    ab_variant: Optional[str] = Field(
+        default=None,
+        description="A/B test variant identifier from X-AB-Variant header",
+    )
+    ab_metadata: Optional[Dict] = Field(
+        default=None,
+        description="A/B test metadata including variant, seed, and selection reason",
+    )
 
 class ReasoningTraceRequest(BaseModel):
     trace_id: str
@@ -27,6 +43,8 @@ class ReasoningTraceResponse(BaseModel):
     surface_output: str
     validation_history: List[Dict]
     escalation_reason: Optional[str] = None
+    ab_variant: Optional[str] = None
+    ab_metadata: Optional[Dict] = None
 
 class HealthResponse(BaseModel):
     status: str
@@ -35,7 +53,7 @@ class HealthResponse(BaseModel):
     qdrant_connected: bool
     opa_connected: bool
     redis_connected: bool = False
-    version: str = "0.3.0"
+    version: str = "0.6.0"
 
 
 class OverrideRequest(BaseModel):

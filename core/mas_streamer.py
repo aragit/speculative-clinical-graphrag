@@ -57,7 +57,12 @@ class MASStreamer:
             "backend_key": "",
             "violations": [],
             "prior_reasoning": "",
+            "validation_mode": "symbolic_only",
+            "reasoning_history": [],
+            "prior_reasoning_path": [],
         }
+        resolved_key = state.get("backend_key") or "mock"
+        state["backend_key"] = resolved_key
 
         # ── Supervisor entry ──
         yield _make_event("NODE_START", "supervisor", {

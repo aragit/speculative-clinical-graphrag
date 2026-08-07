@@ -1,0 +1,5 @@
+rules:
+  - drugs: [Warfarin, ACE Inhibitor, NSAID, Atorvastatin]
+    severity: contraindicated
+    reason: "Teratogenic risk in pregnancy"
+    trimester: all

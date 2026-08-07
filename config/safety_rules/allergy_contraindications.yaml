@@ -1,0 +1,12 @@
+rules:
+  - allergen: Penicillin
+    severity: contraindicated
+    reason: "Anaphylaxis risk: documented penicillin allergy"
+
+  - allergen: Sulfa
+    severity: contraindicated
+    reason: "Severe allergic reaction risk"
+
+  - allergen: Aspirin
+    severity: contraindicated
+    reason: "Documented aspirin allergy"

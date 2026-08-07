@@ -1,0 +1,10 @@
+rules:
+  - allergen: Aspirin
+    drug: Aspirin
+    max_age: 12
+    reason: "Reye syndrome risk in children"
+
+  - allergen: Warfarin
+    drug: Warfarin
+    min_age: 18
+    reason: "Anticoagulation contraindicated under 18 without specialist oversight"

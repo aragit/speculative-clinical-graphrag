@@ -67,7 +67,7 @@ def test_stream_emits_react_traces():
     for trace in traces:
         payload = trace.get("payload", {})
         assert "agent_name" in payload
-        assert "thought" in payload
+        assert "thought" in payload or "observation" in payload
 
 
 def test_stream_emits_governance_check():

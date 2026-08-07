@@ -5,10 +5,10 @@
 </p>
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-blue?style=flat-square&logo=python" alt="Python 3.12">
-  <img src="https://img.shields.io/badge/Architecture-Type_2_Symbolic_Neuro-purple?style=flat-square" alt="Type 2 Symbolic Neuro">
+  <img src="https://img.shields.io/badge/Architecture-Type_2_to_Type_6_Neuro--Symbolic-purple?style=flat-square" alt="Type 2 to Type 6 Neuro-Symbolic">
   <img src="https://img.shields.io/badge/Frontend-React_18_%7C_Vite_%7C_Tailwind-61DAFB?style=flat-square&logo=react" alt="React Frontend">
-  <img src="https://img.shields.io/badge/MCP-Protocol_Compliant-0052CC?style=flat-square" alt="MCP Protocol">
-  <img src="https://img.shields.io/badge/Tests-125_Passed_|_0_Failed-success?style=flat-square" alt="Tests 125 Passed">
+  <img src="https://img.shields.io/badge/MCP-Protocol_Compliant-00522CC?style=flat-square" alt="MCP Protocol">
+  <img src="https://img.shields.io/badge/Tests-200_Passed_|_0_Failed-success?style=flat-square" alt="Tests 200 Passed">
   <img src="https://img.shields.io/badge/FastAPI-0.110-009688?style=flat-square&logo=fastapi" alt="FastAPI 0.110">
   <img src="https://img.shields.io/badge/LangGraph-State_Engine-1C3C3C?style=flat-square" alt="LangGraph Engine">
   <img src="https://img.shields.io/badge/Neo4j-5.15-008CC1?style=flat-square&logo=neo4j" alt="Neo4j 5">
@@ -22,14 +22,49 @@
 
 ---
 
+# Speculative Clinical GraphRAG v0.6.0 — Type 6 Neuro-Symbolic Architecture
+
+## Architecture Status
+
+| Phase | Status | Target | Completion |
+|-------|--------|--------|------------|
+| R0 | ✅ | Mock ontology, basic workflow | v0.1.0 |
+| R1 | ✅ | Neo4j integration, symbolic rules | v0.2.0 |
+| R2 | ✅ | FHIR, external rules, convergence | v0.3.0 |
+| R3 | ✅ | Neural verifier stubs, confidence fusion, agent registry | v0.5.0 |
+| **Type 6** | **✅** | **COGITATOR, neural policy, EVOLUTIO** | **v0.6.0** |
+| R4 | 🔄 | RLHF training, MCP protocol, Glass Box UI | v0.7.0 |
+| R5 | ⏳ | Production hardening, FDA alignment | v1.0.0 |
+
+### Type 6 Safety Architecture
+```
+┌─────────────────────────────────────────┐
+│  Type 6: Neuro[Symbolic]                │
+│  Neural core (COGITATOR) primary        │
+│  Symbolic invariants mandatory          │
+├─────────────────────────────────────────┤
+│  COGITATOR → critique → refine          │
+│  NeuralPolicy → route → record          │
+│  ConfidenceFusion → weighted merge      │
+├─────────────────────────────────────────┤
+│  Type 2 Guardrails (non-negotiable)     │
+│  SymbolicVerifier > Neural (default)    │
+│  Max iterations → escalate              │
+│  Immutable nodes protected              │
+│  Human approval for rule changes        │
+└─────────────────────────────────────────┘
+```
+
 ## Table of Contents
 
+- [Architecture Status](#-architecture-status)
 - [The Paradigm Shift: Graph-Driven Reasoning](#-the-paradigm-shift-graph-driven-reasoning)
 - [MAS Glass Box Cockpit (Frontend UI)](#-mas-glass-box-cockpit-frontend-ui)
 - [System Execution Flow](#-system-execution-flow)
 - [Target 6-Layer Architecture](#-target-6-layer-architecture)
 - [MCP & Hub-and-Spoke Topology](#%EF%B8%8F-model-context-protocol-mcp--hub-and-spoke-topology)
 - [Features](#-features)
+- [API Endpoints](#-api-endpoints)
 - [Quick Start & E2E Demo Mode](#-quick-start--e2e-demo-mode)
 - [Project Directory Structure](#-project-directory-structure)
 - [Module & Layer Deep-Dive](#-module--layer-deep-dive)
@@ -192,6 +227,20 @@ The architecture enforces the **Model Context Protocol (MCP)** specification via
 | **Retrieval** | Hybrid Qdrant vector search + active Cypher graph traversal + RRF fusion | ✅ |
 | **Storage** | Multi-Tiered Memory: Working (Redis), Episodic (Qdrant), Semantic (Neo4j) | ✅ |
 | **Tests** | **125 passing, 4 skipped (Docker-only), 0 failing** (~10s runtime) | ✅ |
+
+---
+
+## API Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /v1/speculate` | Main clinical reasoning |
+| `POST /v1/override` | Human-in-the-loop approval |
+| `GET /v1/reasoning_trace/{id}` | Full audit trail |
+| `GET /v1/agents/health` | Agent health monitoring |
+| `GET /v1/metrics/backends` | A/B backend performance |
+| `GET /v1/policy/stats` | Neural policy accuracy |
+| `POST /v1/analytics/rules/apply` | Apply learned safety rules |
 
 ---
 

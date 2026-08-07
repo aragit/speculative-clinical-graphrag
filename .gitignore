@@ -22,3 +22,5 @@ Thumbs.db
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+SOURCE_CODE.md
+config/safety_rules/staging/

@@ -1,0 +1,28 @@
+rules:
+  - drugs: [Warfarin, Aspirin]
+    severity: major
+    reason: "Major bleed risk: anticoagulant + antiplatelet"
+
+  - drugs: [Warfarin, Ibuprofen]
+    severity: major
+    reason: "Major bleed risk: anticoagulant + NSAID"
+
+  - drugs: [Warfarin, Heparin]
+    severity: major
+    reason: "Dual anticoagulation without indication"
+
+  - drugs: [Amiodarone, Digoxin]
+    severity: major
+    reason: "Additive bradycardia / toxicity risk"
+
+  - drugs: [Metformin, Severe Renal Impairment]
+    severity: contraindicated
+    reason: "Lactic acidosis risk"
+
+  - drugs: [ACE Inhibitor, Angioedema]
+    severity: contraindicated
+    reason: "Contraindicated if history of ACEi angioedema"
+
+  - drugs: [NSAID, Chronic Kidney Disease]
+    severity: contraindicated
+    reason: "Nephrotoxicity risk in CKD"

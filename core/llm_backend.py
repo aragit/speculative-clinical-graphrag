@@ -3,9 +3,16 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Tuple, Optional
 import re
 import json
+import logging
+from core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
+
+logger = logging.getLogger(__name__)
 import httpx
 import os
 import copy
+import logging
+
+logger = logging.getLogger(__name__)
 
 class LLMBackend(ABC):
     @abstractmethod
@@ -226,12 +233,14 @@ class MockLLMBackend(LLMBackend):
         return {"triplets": matched, "reasoning": "MockLLM differential from ontology mappings"}
 
 class OllamaBackend(LLMBackend):
-    def __init__(self, model: str = "gemma2:2b", host: str = "http://localhost:11434", timeout: float = 30.0):
+    def __init__(self, model: str = "gemma2:2b", host: str = "http://localhost:11444", timeout: float = 30.0):
+        from core.circuit_breaker import CircuitBreaker
         self.model = model
         self.host = host
         self.timeout = timeout
         self.client = httpx.AsyncClient(timeout=timeout)
         self._available = None
+        self.cb = CircuitBreaker(f"llm_{self.backend_type}", failure_threshold=3, recovery_timeout=10.0)
 
     @property
     def backend_type(self) -> str:
@@ -248,39 +257,49 @@ class OllamaBackend(LLMBackend):
         return self._available
 
     async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
-        if not await self._check_available():
-            return {"triplets": [], "reasoning": "Ollama unreachable, falling back", "dag_plan": None}
-        prompt = self._build_prompt(patient_note, context)
         try:
-            response = await self.client.post(
-                f"{self.host}/api/generate",
-                json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
-            )
-            response.raise_for_status()
-            data = response.json()
-            parsed = json.loads(data["response"])
-            if isinstance(parsed, list):
-                triplets = parsed
-            elif isinstance(parsed, dict) and "triplets" in parsed:
-                triplets = parsed["triplets"]
-            else:
-                triplets = []
-            return {"triplets": triplets, "reasoning": f"Ollama ({self.model}) generation", "dag_plan": None}
+            async def _generate():
+                if not await self._check_available():
+                    return {"triplets": [], "reasoning": "Ollama unreachable, falling back", "dag_plan": None}
+                prompt = self._build_prompt(patient_note, context)
+                response = await self.client.post(
+                    f"{self.host}/api/generate",
+                    json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+                )
+                response.raise_for_status()
+                data = response.json()
+                parsed = json.loads(data["response"])
+                if isinstance(parsed, list):
+                    triplets = parsed
+                elif isinstance(parsed, dict) and "triplets" in parsed:
+                    triplets = parsed["triplets"]
+                else:
+                    triplets = []
+                return {"triplets": triplets, "reasoning": f"Ollama ({self.model}) generation", "dag_plan": None}
+            return await self.cb.call(_generate)
+        except CircuitBreakerOpenError:
+            logger.warning(f"Circuit breaker OPEN for {self.backend_type}; returning empty path")
+            return {"triplets": [], "reasoning": f"Circuit breaker OPEN for {self.backend_type}", "dag_plan": None}
         except Exception as e:
             return {"triplets": [], "reasoning": f"Ollama error: {e}", "dag_plan": None}
 
     async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
         prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
         try:
-            response = await self.client.post(
-                f"{self.host}/api/generate",
-                json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
-            )
-            response.raise_for_status()
-            data = response.json()
-            parsed = json.loads(data["response"])
-            triplets = parsed if isinstance(parsed, list) else parsed.get("triplets", [])
-            return {"triplets": triplets, "reasoning": f"Ollama correction. Prior: {prior_reasoning[:50]}...", "dag_plan": None}
+            async def _regenerate():
+                response = await self.client.post(
+                    f"{self.host}/api/generate",
+                    json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+                )
+                response.raise_for_status()
+                data = response.json()
+                parsed = json.loads(data["response"])
+                triplets = parsed if isinstance(parsed, list) else parsed.get("triplets", [])
+                return {"triplets": triplets, "reasoning": f"Ollama correction. Prior: {prior_reasoning[:50]}...", "dag_plan": None}
+            return await self.cb.call(_regenerate)
+        except CircuitBreakerOpenError:
+            logger.warning(f"Circuit breaker OPEN for {self.backend_type}; returning empty path")
+            return {"triplets": [], "reasoning": f"Circuit breaker OPEN for {self.backend_type}", "dag_plan": None}
         except Exception as e:
             return {"triplets": [], "reasoning": f"Ollama correction error: {e}", "dag_plan": None}
 
@@ -298,9 +317,12 @@ Patient note: {patient_note}
 Regenerate respecting constraints. Output JSON array only."""
 
     async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
-        prompt = f"""Extract only the medical symptoms and findings from this text.
-Return a JSON object with a "symptoms" array of strings.
+        ctx = f"Context: {json.dumps(context)}\n" if context else ""
+        prompt = f"""{ctx}Extract only the medical symptoms and findings from the following patient note.
+Return a JSON object with a single key "symptoms" containing an array of strings.
+
 Patient note: {patient_note}
+
 Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
         try:
             response = await self.client.post(
@@ -310,8 +332,16 @@ Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
             response.raise_for_status()
             data = response.json()
             parsed = json.loads(data["response"])
-            return {"symptoms": parsed.get("symptoms", [])}
+            symptoms = parsed.get("symptoms", []) if isinstance(parsed, dict) else []
+            normalized = []
+            for s in symptoms:
+                if isinstance(s, str):
+                    normalized.append({"term": s, "confidence": 0.9})
+                elif isinstance(s, dict) and "term" in s:
+                    normalized.append(s)
+            return {"symptoms": normalized}
         except Exception as e:
+            logger.warning(f"Ollama symptom extraction failed: {e}")
             return {"symptoms": []}
 
     async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
@@ -335,6 +365,7 @@ Output a JSON array of triples: [{{"head": "Symptom", "relation": "INDICATES", "
 
 class OpenAICompatBackend(LLMBackend):
     def __init__(self, base_url: str, model: str, timeout: float = 120.0):
+        from core.circuit_breaker import CircuitBreaker
         self.base_url = base_url
         self.model = model
         self.timeout = timeout
@@ -344,6 +375,7 @@ class OpenAICompatBackend(LLMBackend):
         except ImportError:
             self.client = None
         self._client_available = self.client is not None
+        self.cb = CircuitBreaker(f"llm_{self.backend_type}", failure_threshold=3, recovery_timeout=10.0)
 
     async def _chat(self, prompt: str, max_tokens: int = 4096) -> str:
         if not self._client_available:
@@ -359,42 +391,68 @@ class OpenAICompatBackend(LLMBackend):
     async def generate_path(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
         if not self._client_available:
             return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
-        from core.reasoning_extractor import extract_reasoning_trace
-        prompt = self._build_prompt(patient_note, context)
         try:
-            raw = await self._chat(prompt)
-            reasoning, triplets = extract_reasoning_trace(raw)
-            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+            from core.reasoning_extractor import extract_reasoning_trace
+            prompt = self._build_prompt(patient_note, context)
+            async def _generate():
+                raw = await self._chat(prompt)
+                reasoning, triplets = extract_reasoning_trace(raw)
+                return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+            return await self.cb.call(_generate)
+        except CircuitBreakerOpenError:
+            logger.warning(f"Circuit breaker OPEN for {self.backend_type}; returning empty path")
+            return {"triplets": [], "reasoning": f"Circuit breaker OPEN for {self.backend_type}", "dag_plan": None}
         except Exception as e:
             return {"triplets": [], "reasoning": f"{self.backend_type} error: {e}", "dag_plan": None}
 
     async def regenerate_with_feedback(self, patient_note: str, violations: List[Dict], prior_reasoning: str, context: Optional[Dict] = None) -> Dict:
         if not self._client_available:
             return {"triplets": [], "reasoning": "OpenAI client not installed", "dag_plan": None}
-        from core.reasoning_extractor import extract_reasoning_trace, validate_reasoning_coherence
-        prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
         try:
-            raw = await self._chat(prompt)
-            reasoning, triplets = extract_reasoning_trace(raw)
-            coherent = validate_reasoning_coherence(reasoning, prior_reasoning, violations)
-            if not coherent:
-                reasoning += " [WARNING: reasoning may not fully address prior violations]"
-            return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+            from core.reasoning_extractor import extract_reasoning_trace, validate_reasoning_coherence
+            prompt = self._build_correction_prompt(patient_note, violations, prior_reasoning, context)
+            async def _regenerate():
+                raw = await self._chat(prompt)
+                reasoning, triplets = extract_reasoning_trace(raw)
+                coherent = validate_reasoning_coherence(reasoning, prior_reasoning, violations)
+                if not coherent:
+                    reasoning += " [WARNING: reasoning may not fully address prior violations]"
+                return {"triplets": triplets, "reasoning": reasoning, "dag_plan": None}
+            return await self.cb.call(_regenerate)
+        except CircuitBreakerOpenError:
+            logger.warning(f"Circuit breaker OPEN for {self.backend_type}; returning empty path")
+            return {"triplets": [], "reasoning": f"Circuit breaker OPEN for {self.backend_type}", "dag_plan": None}
         except Exception as e:
             return {"triplets": [], "reasoning": f"{self.backend_type} correction error: {e}", "dag_plan": None}
 
     async def extract_symptoms(self, patient_note: str, context: Optional[Dict] = None) -> Dict:
         if not self._client_available:
             return {"symptoms": []}
-        prompt = f"""<think>Identify the key medical symptoms and findings in this patient note.</think>
+        ctx = f"Context: {json.dumps(context)}\n" if context else ""
+        prompt = f"""{ctx}Extract only the medical symptoms and findings from the following patient note.
+Return a JSON object with a single key "symptoms" containing an array of strings.
+
 Patient note: {patient_note}
+
 Output JSON: {{"symptoms": ["symptom1", "symptom2"]}}"""
         try:
             raw = await self._chat(prompt, max_tokens=1024)
-            from core.reasoning_extractor import extract_reasoning_trace
-            _, triplets = extract_reasoning_trace(raw)
-            return {"symptoms": triplets if isinstance(triplets, list) else []}
+            clean_raw = re.sub(r"\xef\xbc\x88.*?\xef\xbc\x89", "", raw, flags=re.DOTALL)
+            raw = clean_raw.strip()
+            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if json_match:
+                raw = json_match.group()
+            parsed = json.loads(raw)
+            symptoms = parsed.get("symptoms", []) if isinstance(parsed, dict) else []
+            normalized = []
+            for s in symptoms:
+                if isinstance(s, str):
+                    normalized.append({"term": s, "confidence": 0.9})
+                elif isinstance(s, dict) and "term" in s:
+                    normalized.append(s)
+            return {"symptoms": normalized}
         except Exception as e:
+            logger.warning(f"OpenAICompat symptom extraction failed: {e}")
             return {"symptoms": []}
 
     async def assess_differential(self, symptoms: List[str], ontology_mappings: List[Dict], patient_context: Optional[Dict] = None) -> Dict:
@@ -479,3 +537,21 @@ class SemanticRouter:
         if any(phrase in note_lower for phrase in ["differential", "multiple comorbidities", "unclear diagnosis", "complex"]):
             return self.config.get("complex_backend", "deepseek_r1")
         return self.config.get("default_backend", "ollama")
+
+    async def route_with_context(
+        self,
+        patient_note: str,
+        patient_context: Optional[Dict] = None,
+    ) -> str:
+        ctx = patient_context or {}
+        age = ctx.get("age")
+        gender = ctx.get("gender")
+        note_lower = patient_note.lower()
+
+        if age is not None and age < 18:
+            return self.config.get("pediatric_backend", "mock")
+        if age is not None and age > 65:
+            return self.config.get("elderly_backend", "deepseek_r1")
+        if gender == "female" and any(k in note_lower for k in ["chest pain", "dyspnea"]):
+            return self.config.get("cardiac_backend", "ollama")
+        return await self.route(patient_note)
