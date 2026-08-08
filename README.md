@@ -176,6 +176,227 @@ flowchart LR
     O -->|fail-closed| E
 ```
 
+## Perception Module: From Raw Data to Cognition
+
+The perception layer transforms unstructured, multi-modal clinical inputs into a **structured, policy-validated, normalized state** before any neural reasoning occurs. It is deterministic, fail-closed, and runs in <50ms.
+
+### 1. Data Ingestion
+
+| Source | Format | Entry Point |
+|--------|--------|-------------|
+| EHR system | FHIR R4 Bundle | `POST /v1/speculate` `patient_context` |
+| Free-text note | Plain text | `POST /v1/speculate` `patient_note` |
+| Direct API | JSON | `POST /v1/speculate` |
+
+### 2. Preprocessing Tracks
+
+**Track A — Structured (FHIR):**
+```python
+# core/fhir_parser.py
+FHIR Bundle → FHIRParser.parse_bundle() → patient_context dict
+Patient → age, gender
+Observation → lab values (eGFR, WBC, creatinine)
+MedicationRequest → active medications
+AllergyIntolerance → documented allergies
+Condition → comorbidities
+```
+
+**Track B — Unstructured (Free Text):**
+```python
+# core/security.py → core/workflow.py _ingest()
+patient_note → InputSanitizer.sanitize_patient_note()
+PII redaction: SSN, email, phone, DOB, MRN → [REDACTED]
+Prompt injection detection: blocks "ignore previous instructions", {{}}, <|...|>, special token abuse
+If injection detected → HTTP 400 at the gateway, never reaches the LLM
+Regex fallback extraction (only if FHIR missing): age, gender, medications
+```
+
+**Track C — Context Fusion:**
+```python
+# core/workflow.py _fhir_parse() → _ingest()
+FHIR data + regex fallback → merged patient_context
+Rule: FHIR wins over regex. If FHIR provided age, regex skips. If FHIR missing medications, regex fills the gap.
+```
+
+### 3. OPA Policy Gate (Perceptual Filtering)
+
+Before data enters the workflow, OPA answers: "Is this input allowed to be processed?"
+```json
+{
+  "input": {
+    "patient_note_length": 450,
+    "patient_context": {"age": 65, "medications": ["Warfarin"]},
+    "caller_role": "clinician"
+  }
+}
+```
+
+| Policy Rule | Purpose | Fail Action |
+|-------------|---------|-------------|
+| max_note_length | DoS prevention | 413 Payload Too Large |
+| required_fields | patient_note must exist | 400 Bad Request |
+| caller_role | readonly cannot speculate | 403 Forbidden |
+| drug_count_sanity | >50 medications → data corruption | 400 + audit log |
+
+If OPA is unreachable → fail-closed (503). The eye blinds shut.
+
+### 4. Normalization (Canonical State)
+
+The perception module produces a GraphState — the only format the brain understands:
+```python
+GraphState(
+    patient_note="[sanitized, PII-redacted, injection-cleaned text]",
+    patient_context={
+        "age": 65,                    # int, never string
+        "gender": "male",             # canonicalized enum
+        "medications": ["Warfarin"],  # title-cased, deduplicated
+        "allergies": ["Penicillin"],  # from FHIR or []
+        "conditions": ["Hypertension"],
+        "observations": [{"code": "eGFR", "value": 45, "unit": "mL/min"}],
+        "pregnancy_status": False,    # explicit bool, never None
+    },
+    backend_key="cogitator",
+    validation_mode="full",
+)
+```
+
+Normalization rules:
+Missing fields = explicit empty lists, not absent keys
+pregnancy_status defaults False (safe default for teratogen checks)
+age is always int or None
+medications are title-cased
+
+### 5. Handoff to Cognition
+
+```plain
+┌─────────────────────────────────────────┐
+│  PERCEPTION (sensory + filter)          │
+│  - ingest, fhir_parse, sanitize, OPA    │
+│  - outputs: canonical GraphState        │
+├─────────────────────────────────────────┤  ← hard boundary
+│  COGNITION (reasoning + action)         │
+│  - retrieve, extract, assess, verify    │
+│  - correct, synthesize, escalate        │
+└─────────────────────────────────────────┘
+```
+
+| Concern | Perception | Cognition |
+|---------|-----------|-----------|
+| Latency | <50ms (regex + OPA) | 500ms–5s (LLM + graph) |
+| Failure mode | Fail-closed (block input) | Fail-open to escalation |
+| Determinism | 100% deterministic | Probabilistic (LLM) |
+| Safety role | Gatekeeper (what gets in) | Reasoner (what gets out) |
+
+### File Mapping
+
+| Function | File | Method |
+|----------|------|--------|
+| Raw ingestion | api/main.py | /v1/speculate |
+| PII redaction | core/security.py | InputSanitizer.sanitize_patient_note() |
+| Injection blocking | core/security.py | InputSanitizer.check_prompt_injection() |
+| Security headers | api/middleware.py | SecurityHeadersMiddleware |
+| Size limiting | api/middleware.py | ContentLengthMiddleware |
+| FHIR parsing | core/fhir_parser.py | FHIRParser.parse_bundle() |
+| Regex fallback | core/workflow.py | _ingest() |
+| OPA input gate | core/verification_layer.py | OPAClient.evaluate() |
+| Context fusion | core/workflow.py | _fhir_parse() → _ingest() merge |
+| State normalization | core/workflow.py | GraphState initialization in run() |
+| Handoff | core/workflow.py | workflow.ainvoke(initial_state) |
+
+## Memory Architecture
+
+The system uses three distinct memory substrates, each with a specific clinical purpose. No buzzwords — just explicit data lifetimes and access patterns.
+
+```mermaid
+flowchart TB
+    subgraph WM["Working Memory (Per-Request)"]
+        GS[GraphState<br/>Immutable Pydantic BaseModel<br/>Lifetime: single request<br/>evolve() creates new instance]
+    end
+
+    subgraph EM["Episodic Memory (Audit Trail)"]
+        TS[TraceStore<br/>Redis / InMemory with TTL<br/>Lifetime: 7 days default<br/>Full reasoning history + overrides]
+    end
+
+    subgraph SM["Semantic Memory (Clinical Knowledge)"]
+        N4[Neo4j Graph<br/>Ontology edges + taxonomy<br/>Persistent until explicitly updated]
+        SY[SymbolicVerifier<br/>YAML rules on disk<br/>Hot-reloadable without restart]
+    end
+
+    subgraph PM["Process Memory (Session Learning)"]
+        NP[NeuralPolicy.history<br/>In-memory list<br/>Lifetime: process lifetime<br/>RLHF training source]
+        BM[BackendRouter.metrics<br/>Per-backend call stats<br/>Lifetime: process lifetime]
+    end
+
+    Workflow -->|writes| GS
+    GS -->|persists| TS
+    Workflow -->|queries| N4
+    Workflow -->|checks| SY
+    Workflow -->|records| NP
+    Workflow -->|records| BM
+    RL[RLHFTrainer] -->|reads| NP
+    OA[OverrideAnalytics] -->|reads| TS
+```
+
+Working Memory — GraphState
+What: Single-request immutable state
+Where: core/workflow.py — GraphState (Pydantic BaseModel)
+Lifetime: One HTTP request
+Key operation: state.evolve(**updates) returns a new instance; no in-place mutation
+Safety: Prevents cross-request leakage via immutable copy semantics
+
+---
+
+Episodic Memory — TraceStore
+What: Audit trail of every clinical decision, reasoning history, and clinician override
+Where: core/persistence.py — RedisTraceStore / InMemoryTraceStore
+Lifetime: Configurable TTL (default 7 days via REDIS_TTL_SECONDS)
+Schema per trace:
+```python
+{
+    "trace_id": "abc123",
+    "reasoning_trace": "...",
+    "reasoning_history": [...],  # all correction iterations
+    "validation_mode": "full",
+    "backend_key": "cogitator",
+    "patient_hash": "sha256_prefix",  # not reversible
+    "created_at": "2026-08-08T..."
+}
+```
+Access: GET /v1/reasoning_trace/{id} retrieves full history
+Purpose: Regulatory auditability, clinician review, RLHF data source
+
+---
+
+Semantic Memory — Neo4j + YAML Rules
+What: Persistent clinical knowledge and safety constraints
+Where:
+core/verification_layer.py — Neo4jVerifier (graph taxonomy)
+config/safety_rules/*.yaml — drug interactions, allergies, pregnancy, age rules
+Lifetime: Persistent (disk + database)
+Key operation: SymbolicVerifier.hot_reload() updates rules without process restart
+Purpose: Ground truth that outlives any single request or model version
+
+---
+
+Process Memory — Session Learning
+What: Transient statistics used for online improvement
+Where:
+core/neural_policy.py — history list (state_features, predicted, actual, reward)
+core/backend_router.py — BackendMetrics (calls, latency, escalation rate)
+Lifetime: Process lifetime; lost on restart unless persisted to Redis/PostgreSQL
+Purpose: RLHF training input, backend performance A/B testing
+
+---
+
+Memory Safety Guarantees
+
+| Guarantee | Enforcement |
+|-----------|-------------|
+| No PII in episodic memory | patient_hash is SHA-256 prefix; raw note redacted before storage |
+| No cross-request state leakage | GraphState.evolve() creates new instances per request |
+| Audit trail immutability | TraceStore save() is append-only; update() for overrides only |
+| Knowledge hot-swappable | SymbolicVerifier.hot_reload() + DAGModifier rule application |
+
 ### The Paradigm Shift: Neuro-Symbolic Control
 
 Standard agentic frameworks leave routing and safety inside the LLM's latent space. In clinical settings, this causes hallucination loops and non-deterministic failures. This architecture inverts that:
@@ -324,11 +545,20 @@ docker-compose up -d
 python -m uvicorn api.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
-### Mode 3: GPU-Accelerated (vLLM + DeepSeek-R1 or MedGemma)
+### Mode 3: GPU-Accelerated (vLLM + MedGemma or DeepSeek-R1)
+
+Requires NVIDIA Docker runtime and a CUDA-capable GPU.
 
 ```bash
-docker-compose --profile gpu up -d
-# Set RUNTIME_LLM=deepseek_r1 in .env
+# Start all infrastructure including vLLM inference engine
+docker compose --profile gpu up -d
+
+# Set backend to vLLM-served model
+export RUNTIME_LLM=medgemma_4b_it
+# or: export RUNTIME_LLM=deepseek_r1
+
+# Start API
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 ### Tests
@@ -407,15 +637,44 @@ speculative-clinical-graphrag/
 └── README.md
 ```
 
-### LLM Backends
+## 🤖 LLM Backends
 
-| Backend | Env Var | Description |
+| Backend | Env Var | Base Class | Description |
+|---------|---------|-----------|-------------|
+| `mock` | `RUNTIME_LLM=mock` | `MockLLMBackend` | Deterministic responses for CI/tests |
+| `ollama` | `RUNTIME_LLM=ollama` | `OllamaBackend` | Local CPU inference via Ollama API |
+| `openai_compat` | `RUNTIME_LLM=openai_compat` | `OpenAICompatBackend` | **Generic vLLM / OpenAI-compatible server** |
+| `deepseek_r1` | `RUNTIME_LLM=deepseek_r1` | `OpenAICompatBackend` | Pre-configured for DeepSeek-R1 on vLLM |
+| `medgemma_4b_it` | `RUNTIME_LLM=medgemma_4b_it` | `OpenAICompatBackend` | Pre-configured for MedGemma-4B-IT on vLLM |
+| `cogitator` | `RUNTIME_LLM=cogitator` | `COGITATORBackend` | Wraps any above; adds self-critique + uncertainty calibration |
+
+**Backend resolution:** `deepseek_r1` and `medgemma_4b_it` are `OpenAICompatBackend` instances with preset `base_url` pointing at the vLLM container and model IDs. They require the Docker Compose `gpu` profile.
+
+### GPU Mode: vLLM Serving
+
+The `docker-compose.yml` includes a `vllm` service under the `gpu` profile. This runs the inference engine with an OpenAI-compatible API endpoint that `OpenAICompatBackend` consumes.
+
+```bash
+# 1. Start infrastructure + vLLM (requires NVIDIA Docker runtime + GPU)
+docker compose --profile gpu up -d
+
+# 2. Verify vLLM health
+curl http://localhost:8000/v1/models
+
+# 3. Run API with vLLM-backed MedGemma
+export RUNTIME_LLM=medgemma_4b_it
+export VLLM_URL=http://localhost:8000/v1
+export VLLM_MODEL=google/MedGemma-4B-IT
+python -m uvicorn api.main:app --reload
+```
+
+vLLM environment variables:
+
+| Variable | Default | Description |
 |---------|---------|-------------|
-| mock | `RUNTIME_LLM=mock` | Deterministic responses for CI/tests |
-| ollama | `RUNTIME_LLM=ollama` | Local CPU inference (gemma2:2b) |
-| deepseek_r1 | `RUNTIME_LLM=deepseek_r1` | Complex reasoning via vLLM |
-| medgemma_4b_it | `RUNTIME_LLM=medgemma_4b_it` | Clinical fine-tuned model via vLLM |
-| cogitator | — | Wraps any above; adds self-critique + uncertainty calibration |
+| VLLM_URL | http://vllm:8000/v1 | Base URL of the vLLM OpenAI-compatible API |
+| VLLM_MODEL | google/MedGemma-4B-IT | Model name served by vLLM |
+| RUNTIME_LLM | mock | Backend key selected by BackendRouter |
 
 ### Testing & Verification
 
@@ -432,14 +691,14 @@ pytest tests/ -v
 
 ### 🐳 Docker & CI/CD
 
-| Service | Image | Ports |
-|---------|-------|-------|
-| neo4j | `neo4j:5.15-community` | 7687, 7474 |
-| qdrant | `qdrant/qdrant` | 6333 |
-| redis | `redis:7-alpine` | 6379 |
-| opa | `openpolicyagent/opa` | 8181 |
-| fastapi | (build) | 8001 |
-| vllm | `vllm/vllm-openai` | 8000 (gpu profile) |
+| Service | Image | Ports | Profile | Description |
+|---------|-------|-------|---------|-------------|
+| neo4j | `neo4j:5.15-community` | 7687, 7474 | | Graph database |
+| qdrant | `qdrant/qdrant` | 6333 | | Vector search |
+| redis | `redis:7-alpine` | 6379 | | Trace store, caching |
+| opa | `openpolicyagent/opa` | 8181 | | Policy engine (fail-closed) |
+| fastapi | (build) | 8001 | | API gateway |
+| vllm | `vllm/vllm-openai` | 8000 | `gpu` | Serves MedGemma/DeepSeek via OpenAI-compatible API |
 
 ### 📄 License
 
