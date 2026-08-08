@@ -69,14 +69,14 @@ flowchart TB
         N4[Neo4j Taxonomy<br/>full / degraded / symbolic_only]
         SV[SymbolicVerifier<br/>YAML Rules: drug / allergy / pregnancy / age]
         OP[OPA Policy Engine<br/>Rego: fail-closed]
-        NV[NeuralVerifier ABC<br/>MockNeuralVerifier &#40;disabled by default&#41;]
+        NV[NeuralVerifier ABC<br/>MockNeuralVerifier - disabled by default]
         CF[ConfidenceFusion<br/>Weighted Aggregation]
     end
 
     subgraph Learning["Self-Improvement (EVOLUTIO)"]
         OA[OverrideAnalytics<br/>Pattern Mining from Trace Store]
         RL[RLHFTrainer<br/>Logistic Regression on Outcomes]
-        HR[Hot Reload<br/>SymbolicVerifier.load_rules&#40;&#41;]
+        HR[Hot Reload<br/>SymbolicVerifier.load_rules]
     end
 
     subgraph MCP["MCP Control Plane"]
@@ -310,7 +310,7 @@ The system uses three distinct memory substrates, each with a specific clinical 
 ```mermaid
 flowchart TB
     subgraph WM["Working Memory (Per-Request)"]
-        GS[GraphState<br/>Immutable Pydantic BaseModel<br/>Lifetime: single request<br/>evolve&#40;&#41; creates new instance]
+        GS[GraphState<br/>Immutable Pydantic BaseModel<br/>Lifetime: single request<br/>evolve creates new instance]
     end
 
     subgraph EM["Episodic Memory (Audit Trail)"]
