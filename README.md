@@ -303,99 +303,203 @@ medications are title-cased
 | State normalization | core/workflow.py | GraphState initialization in run() |
 | Handoff | core/workflow.py | workflow.ainvoke(initial_state) |
 
-## Memory Architecture
+## What "Workflow" Actually Is — And the Correct Architecture
 
-The system uses three distinct memory substrates, each with a specific clinical purpose. No buzzwords — just explicit data lifetimes and access patterns.
+In your repo, Workflow = SpeculativeGraphRAG = the compiled LangGraph state machine. But that's an implementation detail. Architecturally, the system has three cognitive layers:
+
+```plain
+┌─────────────────────────────────────────────────────────────┐
+│  PERCEPTION (Deterministic, <50ms, fail-closed)            │
+│  fhir_parse → ingest → InputSanitizer → OPA Gate          │
+│  Output: canonical GraphState (Working Memory)            │
+├─────────────────────────────────────────────────────────────┤
+│  COGNITION (Probabilistic, 500ms–5s, fail-open→escalate)   │
+│  retrieve_context → extract_symptoms → map_to_ontology    │
+│  → assess_differential (COGITATOR) → verify_safety        │
+│  → ConfidenceFusion → NeuralPolicy routing                  │
+│  Reads: Semantic Memory (Neo4j + YAML rules)              │
+│  Writes: updated GraphState (Working Memory)              │
+├─────────────────────────────────────────────────────────────┤
+│  EXECUTION (Deterministic, <100ms)                        │
+│  synthesize → escalate OR MCP tool call                    │
+│  Reads: final GraphState                                  │
+│  Writes: TraceStore (Episodic Memory)                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Corrected diagram:
 
 ```mermaid
 flowchart TB
+    subgraph PERCEPTION["Perception Layer (Deterministic, 50ms)"]
+        FHIR[FHIR Parser<br/>fhir_parse node]
+        SAN[InputSanitizer<br/>PII redaction + injection block]
+        OPA_G[OPA Gate<br/>fail-closed policy check]
+        REGEX[Regex Fallback<br/>ingest node]
+    end
+
     subgraph WM["Working Memory (Per-Request)"]
-        GS[GraphState<br/>Immutable Pydantic BaseModel<br/>Lifetime: single request<br/>evolve creates new instance]
+        GS[GraphState<br/>Immutable Pydantic BaseModel<br/>Lifetime: single request]
     end
 
-    subgraph EM["Episodic Memory (Audit Trail)"]
-        TS[TraceStore<br/>Redis / InMemory with TTL<br/>Lifetime: 7 days default<br/>Full reasoning history + overrides]
+    subgraph COGNITION["Cognition / Brain (Probabilistic)"]
+        RET[retrieve_context<br/>Hybrid RAG]
+        EXT[extract_symptoms<br/>LLM extraction]
+        MAP[map_to_ontology<br/>Graph mapping]
+        COG[assess_differential<br/>COGITATOR Neural Core]
+        VER[verify_safety<br/>VerificationOrchestrator]
+        CF[ConfidenceFusion<br/>weighted aggregation]
+        NP[NeuralPolicy<br/>routing decisions]
     end
 
-    subgraph SM["Semantic Memory (Clinical Knowledge)"]
-        N4[Neo4j Graph<br/>Ontology edges + taxonomy<br/>Persistent until explicitly updated]
-        SY[SymbolicVerifier<br/>YAML rules on disk<br/>Hot-reloadable without restart]
+    subgraph SEMANTIC["Semantic Memory (Persistent Knowledge)"]
+        N4[Neo4j Graph<br/>Ontology taxonomy]
+        YAML[YAML Rules<br/>drug/allergy/pregnancy/age]
     end
 
-    subgraph PM["Process Memory (Session Learning)"]
-        NP[NeuralPolicy.history<br/>In-memory list<br/>Lifetime: process lifetime<br/>RLHF training source]
-        BM[BackendRouter.metrics<br/>Per-backend call stats<br/>Lifetime: process lifetime]
+    subgraph EXECUTION["Execution / Action"]
+        SYN[synthesize<br/>output formatting]
+        ESC[escalate<br/>human-in-the-loop]
+        MCP_EXE[MCP Tools<br/>query_ehr / order_lab / ...]
     end
 
-    Workflow -->|writes| GS
-    GS -->|persists| TS
-    Workflow -->|queries| N4
-    Workflow -->|checks| SY
-    Workflow -->|records| NP
-    Workflow -->|records| BM
-    RL[RLHFTrainer] -->|reads| NP
-    OA[OverrideAnalytics] -->|reads| TS
+    subgraph EPISODIC["Episodic Memory (Audit Trail)"]
+        TS[TraceStore<br/>Redis / InMemory + TTL<br/>7 days default]
+    end
+
+    subgraph LEARNING["Learning (Offline / Async)"]
+        OA[OverrideAnalytics<br/>pattern mining]
+        RL[RLHFTrainer<br/>logistic regression]
+    end
+
+    PERCEPTION -->|produces| GS
+    GS -->|feeds| COGNITION
+    COGNITION -->|queries| SEMANTIC
+    COGNITION -->|updates| GS
+    COGNITION -->|decides| EXECUTION
+    EXECUTION -->|reads| GS
+    EXECUTION -->|persists| EPISODIC
+    EPISODIC -->|feeds| LEARNING
+    LEARNING -->|updates| SEMANTIC
+```
+
+Key fix: Memory is shown as what the cognitive layers use, not as disconnected boxes.
+
+## Memory Architecture
+
+Memory is not a storage layer — it is the **substrate that cognitive phases read and write**. The system implements three agentic memory types, each matched to its access pattern.
+
+```mermaid
+flowchart TB
+    subgraph PERCEPTION["Perception Layer (Deterministic, 50ms)"]
+        FHIR[FHIR Parser<br/>fhir_parse node]
+        SAN[InputSanitizer<br/>PII redaction + injection block]
+        OPA_G[OPA Gate<br/>fail-closed policy check]
+        REGEX[Regex Fallback<br/>ingest node]
+    end
+
+    subgraph WM["Working Memory (Per-Request)"]
+        GS[GraphState<br/>Immutable Pydantic BaseModel<br/>Lifetime: single request]
+    end
+
+    subgraph COGNITION["Cognition / Brain (Probabilistic)"]
+        RET[retrieve_context<br/>Hybrid RAG]
+        EXT[extract_symptoms<br/>LLM extraction]
+        MAP[map_to_ontology<br/>Graph mapping]
+        COG[assess_differential<br/>COGITATOR Neural Core]
+        VER[verify_safety<br/>VerificationOrchestrator]
+        CF[ConfidenceFusion<br/>weighted aggregation]
+        NP[NeuralPolicy<br/>routing decisions]
+    end
+
+    subgraph SEMANTIC["Semantic Memory (Persistent Knowledge)"]
+        N4[Neo4j Graph<br/>Ontology taxonomy]
+        YAML[YAML Rules<br/>drug/allergy/pregnancy/age]
+    end
+
+    subgraph EXECUTION["Execution / Action"]
+        SYN[synthesize<br/>output formatting]
+        ESC[escalate<br/>human-in-the-loop]
+        MCP_EXE[MCP Tools<br/>query_ehr / order_lab / ...]
+    end
+
+    subgraph EPISODIC["Episodic Memory (Audit Trail)"]
+        TS[TraceStore<br/>Redis / InMemory + TTL<br/>7 days default]
+    end
+
+    subgraph LEARNING["Learning (Offline / Async)"]
+        OA[OverrideAnalytics<br/>pattern mining]
+        RL[RLHFTrainer<br/>logistic regression]
+    end
+
+    PERCEPTION -->|produces| GS
+    GS -->|feeds| COGNITION
+    COGNITION -->|queries| SEMANTIC
+    COGNITION -->|updates| GS
+    COGNITION -->|decides| EXECUTION
+    EXECUTION -->|reads| GS
+    EXECUTION -->|persists| EPISODIC
+    EPISODIC -->|feeds| LEARNING
+    LEARNING -->|updates| SEMANTIC
 ```
 
 Working Memory — GraphState
-What: Single-request immutable state
-Where: core/workflow.py — GraphState (Pydantic BaseModel)
-Lifetime: One HTTP request
-Key operation: state.evolve(**updates) returns a new instance; no in-place mutation
-Safety: Prevents cross-request leakage via immutable copy semantics
 
----
-
-Episodic Memory — TraceStore
-What: Audit trail of every clinical decision, reasoning history, and clinician override
-Where: core/persistence.py — RedisTraceStore / InMemoryTraceStore
-Lifetime: Configurable TTL (default 7 days via REDIS_TTL_SECONDS)
-Schema per trace:
-```python
-{
-    "trace_id": "abc123",
-    "reasoning_trace": "...",
-    "reasoning_history": [...],  # all correction iterations
-    "validation_mode": "full",
-    "backend_key": "cogitator",
-    "patient_hash": "sha256_prefix",  # not reversible
-    "created_at": "2026-08-08T..."
-}
-```
-Access: GET /v1/reasoning_trace/{id} retrieves full history
-Purpose: Regulatory auditability, clinician review, RLHF data source
-
----
+Cognitive role: Short-term scratchpad holding the current request's entire state
+Implementation: core/workflow.py — Pydantic BaseModel with evolve() for immutable updates
+Lifetime: Single HTTP request (created at request start, garbage collected after response)
+Why not DuckDB/Postgres/Mongo: Working memory requires microsecond in-process mutations. Any database I/O (even local SQLite) adds >1ms latency — unacceptable for state transitions that happen 10+ times per request.
 
 Semantic Memory — Neo4j + YAML Rules
-What: Persistent clinical knowledge and safety constraints
-Where:
-core/verification_layer.py — Neo4jVerifier (graph taxonomy)
-config/safety_rules/*.yaml — drug interactions, allergies, pregnancy, age rules
-Lifetime: Persistent (disk + database)
-Key operation: SymbolicVerifier.hot_reload() updates rules without process restart
-Purpose: Ground truth that outlives any single request or model version
 
----
+Cognitive role: Long-term clinical knowledge (what drugs interact, what symptoms indicate what conditions)
+Implementation:
+core/verification_layer.py — Neo4jVerifier (graph taxonomy, ~120 edges in mock ontology)
+config/safety_rules/*.yaml — SymbolicVerifier rules (drug interactions, allergies, pregnancy, age)
+Lifetime: Persistent (disk/database until explicitly updated)
+Update mechanism: SymbolicVerifier.hot_reload() loads new YAML without restart; DAGModifier gates topology changes
+Why Neo4j over DuckDB: Graph-native path queries ((a)-[:REL]->(b)) are 10–100x faster than relational join tables for ontology traversal. DuckDB is relational OLAP — wrong data model.
 
-Process Memory — Session Learning
-What: Transient statistics used for online improvement
-Where:
-core/neural_policy.py — history list (state_features, predicted, actual, reward)
+Episodic Memory — TraceStore
+
+Cognitive role: Past experiences (every decision, reasoning chain, clinician override) used for audit and learning
+Implementation: core/persistence.py — RedisTraceStore / InMemoryTraceStore
+Lifetime: Configurable TTL (default 7 days via REDIS_TTL_SECONDS)
+Schema: trace_id, reasoning_history, validation_mode, backend_key, patient_hash (SHA-256 prefix, not reversible)
+Why Redis over DuckDB: Episodic memory needs high-write throughput (every request appends), TTL expiration (auto-cleanup), and key-value retrieval by ID. DuckDB is optimized for bulk analytical reads, not high-frequency single-row writes with expiration.
+
+Process Memory — Session Learning (Transient)
+
+Cognitive role: Statistics for online improvement, lost on restart
+Implementation:
+core/neural_policy.py — history list (features, predicted, actual, reward)
 core/backend_router.py — BackendMetrics (calls, latency, escalation rate)
-Lifetime: Process lifetime; lost on restart unless persisted to Redis/PostgreSQL
-Purpose: RLHF training input, backend performance A/B testing
+Lifetime: Process lifetime
+Future: Persist to Redis/PostgreSQL if cross-process learning needed
 
----
+## The Three Agentic Memory Types — And Why Not DuckDB
 
-Memory Safety Guarantees
+The Standard Triad (ACT-R / SOAR / Modern Agent Architectures)
 
-| Guarantee | Enforcement |
-|-----------|-------------|
-| No PII in episodic memory | patient_hash is SHA-256 prefix; raw note redacted before storage |
-| No cross-request state leakage | GraphState.evolve() creates new instances per request |
-| Audit trail immutability | TraceStore save() is append-only; update() for overrides only |
-| Knowledge hot-swappable | SymbolicVerifier.hot_reload() + DAGModifier rule application |
+| Memory Type | Cognitive Role | Your System | File/Module |
+|-------------|---------------|-------------|-------------|
+| Working Memory | Short-term scratchpad. Active task context. Limited capacity, sub-millisecond access. | GraphState (immutable per-request) | core/workflow.py |
+| Semantic Memory | Long-term factual knowledge. Stable rules, relationships, taxonomy. Persistent, slow to update. | Neo4j ontology + YAML safety rules | core/verification_layer.py + config/safety_rules/ |
+| Episodic Memory | Past experiences, decisions, outcomes. Used for learning and audit. | TraceStore (reasoning history, overrides) | core/persistence.py |
+
+Why Not DuckDB? (Or Mongo, Postgres, etc.)
+
+| Memory Layer | Why Redis (What You Used) | Why NOT DuckDB | Why NOT Mongo/Postgres |
+|-------------|--------------------------|----------------|----------------------|
+| Working | In-process Python objects (GraphState). Zero I/O. | Even in-memory DuckDB has SQL parse + plan overhead (>1ms). Working memory needs microsecond mutation. | Network roundtrip kills latency. |
+| Episodic | Native TTL (EXPIRE), high-write throughput, key-value by trace_id. | DuckDB is OLAP (analytical). Optimized for bulk reads, not high-frequency single-row writes with TTL. | Mongo would work but adds operational complexity. Redis is already in your stack for rate limiting. |
+| Semantic | Neo4j is graph-native. Cypher path queries ((a)-[:REL]->(b)) are its core operation. | DuckDB is relational. Graph edges as join tables = 10–100x slower for path traversal. | Postgres with pg_graph would work, but Neo4j is purpose-built. |
+
+Where DuckDB WOULD Make Sense
+If you were building analytics on historical traces (e.g., "What percentage of escalations involved patients over 75?"), DuckDB would be perfect. But your OverrideAnalytics does pattern mining in Python over recent traces — it doesn't need SQL analytics.
+
+What About Vector DBs?
+You do use a vector DB: Qdrant (core/retrieval.py). But it's not a "memory" substrate — it's a retrieval index for semantic search. It doesn't store experiences or rules; it stores embeddings for similarity lookup.
 
 ### The Paradigm Shift: Neuro-Symbolic Control
 
