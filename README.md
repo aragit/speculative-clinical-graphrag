@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Architecture-Type_6_Neuro--Symbolic-purple?style=flat-square" alt="Type 6 Neuro-Symbolic">
   <img src="https://img.shields.io/badge/MCP-Protocol_v2024--11--05-0052CC?style=flat-square" alt="MCP Protocol">
   <img src="https://img.shields.io/badge/Status-v0.6.4--adversarial--hardened-orange?style=flat-square" alt="v0.6.4-adversarial-hardened">
-  <img src="https://img.shields.io/badge/Tests-227%2B%20Passed%20%7C%200%20Failed-brightgreen?style=flat-square" alt="Tests 227+ Passed">
+  <img src="https://img.shields.io/badge/Tests-268%20Tests%20%7C%200%20Failed-brightgreen?style=flat-square" alt="268 Tests | 0 Failed">
   <img src="https://img.shields.io/badge/Adversarial%20Tests-35%20Red--Team-brightgreen?style=flat-square" alt="35 Adversarial Tests">
   <img src="https://img.shields.io/badge/FastAPI-0.110-009688?style=flat-square&logo=fastapi" alt="FastAPI 0.110">
   <img src="https://img.shields.io/badge/LangGraph-State_Engine-1C3C3C?style=flat-square" alt="LangGraph Engine">
@@ -235,7 +235,7 @@ Security model: Role-based access control + OPA policy pre-check + circuit break
 | Retrieval | Hybrid Qdrant vector + Neo4j graph with fusion scoring | ✅ |
 | Persistence | Redis-backed trace store with TTL; InMemory fallback | ✅ |
 | Security | PII redaction, prompt injection detection, security headers, audit logging | ✅ |
-| Testing | 227+ tests: unit, integration, property-based (Hypothesis), adversarial | ✅ |
+| Testing | 268 tests: unit/integration, property-based (Hypothesis), 35-test adversarial red-team suite | ✅ |
 | Load Testing | Locust simulation suite | ✅ |
 | CI/CD | Bandit SAST, Safety dependency scan, pip-audit, ruff | ✅ |
 | Frontend UI | Not implemented (R6 roadmap) | ⏳ |
@@ -335,7 +335,7 @@ docker-compose --profile gpu up -d
 
 ```bash
 pytest tests/ -v
-# 227+ passed, 5 skipped (external services), 0 failures
+# 268 tests, 5 skipped (external services), 0 failures in CI
 ```
 
 ### Load Test
@@ -428,7 +428,7 @@ pytest tests/ -v
 | Unit/Integration | ~180 | Workflow, verification, API correctness |
 | Property-Based | 14 | Edge cases via Hypothesis (empty input, 10KB notes, random symptoms) |
 | Adversarial | 35 | Safety invariants hold under attack (injection, bypass, exhaustion) |
-| **Total** | **227+** | **0 failures** |
+| **Total** | **268** | **0 failures** |
 
 ### 🐳 Docker & CI/CD
 
