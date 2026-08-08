@@ -7,6 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from typing import Dict
 from api.schemas import (
     SpeculateRequest, SpeculateResponse, ReasoningTraceResponse,
     HealthResponse, OverrideRequest, OverrideResponse,
@@ -18,6 +19,9 @@ from core.llm_backend import MockLLMBackend
 from core.mas_streamer import MASStreamer
 from core.evolutio import OverrideAnalytics
 from core.persistence import get_trace_store, TraceStore
+from core.mcp_protocol import ToolRegistry, MCPProtocolServer, MCPControlPlane
+from core.mcp_tools import register_all_clinical_tools
+from core.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +67,24 @@ rag = SpeculativeGraphRAG(
     symbolic_verifier=symbolic,
     max_iterations=3,
 )
+
+# Initialize MCP
+mcp_registry = ToolRegistry()
+register_all_clinical_tools(mcp_registry)
+
+mcp_server = MCPProtocolServer(
+    tool_registry=mcp_registry,
+    opa_client=get_opa_client(),
+    circuit_breaker_factory=lambda name: CircuitBreaker(name, failure_threshold=3),
+)
+
+mcp_control_plane = MCPControlPlane(
+    tool_registry=mcp_registry,
+    mcp_server=mcp_server,
+    agent_registry=rag.agent_registry,
+)
+rag.mcp = mcp_control_plane
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
@@ -309,6 +331,49 @@ async def agent_health():
             }
             for agent in rag.agent_registry.list_all()
         }
+    }
+
+
+@app.post("/v1/mcp/initialize")
+async def mcp_initialize():
+    """MCP initialize endpoint."""
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {},
+    }
+    return await mcp_server.handle_request(request)
+
+
+@app.post("/v1/mcp/tools/list")
+async def mcp_tools_list(role: str = "readonly"):
+    """List available MCP tools for a given role."""
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {"permission": role},
+    }
+    return await mcp_server.handle_request(request)
+
+
+@app.post("/v1/mcp/tools/call")
+async def mcp_tools_call(request: Dict):
+    """Execute an MCP tool call."""
+    return await mcp_server.handle_request(request)
+
+
+@app.post("/v1/mcp/agent/tool")
+async def agent_tool_request(agent_name: str, tool_name: str, arguments: Dict):
+    """Agent requests tool via control plane."""
+    result = await mcp_control_plane.agent_request_tool(agent_name, tool_name, arguments)
+    return {
+        "tool": result.tool,
+        "success": result.success,
+        "data": result.data,
+        "error": result.error,
+        "execution_time_ms": result.execution_time_ms,
     }
 
 

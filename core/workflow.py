@@ -67,6 +67,7 @@ class SpeculativeGraphRAG:
         neural_verifier: Optional["object"] = None,
         enable_neural: bool = False,
         max_iterations: int = 3,
+        mcp_control_plane: Optional["object"] = None,
     ):
         if router is not None:
             self.router_backend = router
@@ -101,6 +102,7 @@ class SpeculativeGraphRAG:
         )
         self.enable_neural_policy = os.getenv("ENABLE_NEURAL_POLICY", "false").lower() == "true"
         self._pending_decision: Optional[Dict] = None
+        self.mcp = mcp_control_plane
 
     def _register_agents(self):
         """Register all workflow nodes as agents with capabilities."""
@@ -228,6 +230,10 @@ class SpeculativeGraphRAG:
         @self.topology.register("dag_modifier", edges=["synthesize"])
         async def dag_modifier(state: GraphState):
             return await self._dag_modify(state)
+
+        @self.topology.register("tool_enrichment", edges=["assess_differential"])
+        async def tool_enrichment(state: GraphState):
+            return await self._tool_enrichment(state)
 
     def _build_graph(self):
         return self.topology.build(lambda: StateGraph(GraphState))
@@ -492,6 +498,32 @@ class SpeculativeGraphRAG:
             return {}
         self._log(state, "dag_modifier", "dynamic DAG disabled at runtime, passing through")
         return {**self._log(state, "dag_modifier", "dynamic DAG disabled, passing through")}
+
+    async def _tool_enrichment(self, state: GraphState):
+        """Optional node: enrich context with EHR data via MCP tools."""
+        if self.mcp is None:
+            return {}
+
+        patient_id = self._s(state, "patient_context", {}).get("patient_id")
+        if not patient_id:
+            return {}
+
+        try:
+            result = await self.mcp.agent_request_tool(
+                agent_name="ingest",
+                tool_name="query_ehr",
+                arguments={"patient_id": patient_id, "resource_type": "Patient"},
+            )
+            if result.success:
+                ehr_data = json.loads(result.data) if isinstance(result.data, str) else result.data
+                ctx = dict(self._s(state, "patient_context", {}))
+                ctx["ehr_data"] = ehr_data.get("data", {})
+                self._log(state, "tool_enrichment", "EHR data retrieved via MCP")
+                return {"patient_context": ctx}
+        except Exception as e:
+            logger.warning(f"Tool enrichment failed: {e}")
+
+        return {}
 
     async def _synthesize(self, state: GraphState):
         path = self._s(state, "proposed_path", [])
