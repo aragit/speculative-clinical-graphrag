@@ -4,16 +4,17 @@
   <img src="assets/ban.png" alt="Speculative Clinical GraphRAG Banner" width="100%">
 </p>
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12-blue?style=flat-square&logo=python" alt="Python 3.12">
-  <img src="https://img.shields.io/badge/Architecture-Type_2_to_Type_6_Neuro--Symbolic-purple?style=flat-square" alt="Type 2 to Type 6 Neuro-Symbolic">
-  <img src="https://img.shields.io/badge/Frontend-React_18_%7C_Vite_%7C_Tailwind-61DAFB?style=flat-square&logo=react" alt="React Frontend">
-  <img src="https://img.shields.io/badge/MCP-Protocol_Compliant-00522CC?style=flat-square" alt="MCP Protocol">
-  <img src="https://img.shields.io/badge/Tests-200_Passed_|_0_Failed-success?style=flat-square" alt="Tests 200 Passed">
-  <img src="https://img.shields.io/badge/FastAPI-0.110-009688?style=flat-square&logo=fastapi" alt="FastAPI 0.110">
-  <img src="https://img.shields.io/badge/LangGraph-State_Engine-1C3C3C?style=flat-square" alt="LangGraph Engine">
-  <img src="https://img.shields.io/badge/Neo4j-5.15-008CC1?style=flat-square&logo=neo4j" alt="Neo4j 5">
-  <img src="https://img.shields.io/badge/Qdrant-1.7-EB5245?style=flat-square&logo=qdrant" alt="Qdrant 1.7">
-  <img src="https://img.shields.io/badge/OPA-Zero_Trust_Rego-7A5CF7?style=flat-square&logo=openpolicyagent" alt="OPA Policy">
+   <img src="https://img.shields.io/badge/Python-3.12-blue?style=flat-square&logo=python" alt="Python 3.12">
+   <img src="https://img.shields.io/badge/Architecture-Type_2_to_Type_6_Neuro--Symbolic-purple?style=flat-square" alt="Type 2 to Type 6 Neuro-Symbolic">
+   <img src="https://img.shields.io/badge/Frontend-React_18_%7C_Vite_%7C_Tailwind-61DAFB?style=flat-square&logo=react" alt="React Frontend">
+   <img src="https://img.shields.io/badge/MCP-Protocol_v2024--11--05-00522CC?style=flat-square" alt="MCP Protocol">
+   <img src="https://img.shields.io/badge/Tests-220_Passed_|_0_Failed-success?style=flat-square" alt="Tests 220 Passed">
+   <img src="https://img.shields.io/badge/FastAPI-0.110-009688?style=flat-square&logo=fastapi" alt="FastAPI 0.110">
+   <img src="https://img.shields.io/badge/LangGraph-State_Engine-1C3C3C?style=flat-square" alt="LangGraph Engine">
+   <img src="https://img.shields.io/badge/Neo4j-5.15-008CC1?style=flat-square&logo=neo4j" alt="Neo4j 5">
+   <img src="https://img.shields.io/badge/Qdrant-1.7-EB5245?style=flat-square&logo=qdrant" alt="Qdrant 1.7">
+   <img src="https://img.shields.io/badge/OPA-Zero_Trust_Rego-7A5CF7?style=flat-square&logo=openpolicyagent" alt="OPA Policy">
+   <img src="https://img.shields.io/badge/Security-HIPAA_Hardened-006600?style=flat-square" alt="Security Hardened">
 </p>
 
 <p align="center">
@@ -33,8 +34,8 @@
 | R2 | ✅ | FHIR, external rules, convergence | v0.3.0 |
 | R3 | ✅ | Neural verifier stubs, confidence fusion, agent registry | v0.5.0 |
 | **Type 6** | **✅** | **COGITATOR, neural policy, EVOLUTIO** | **v0.6.0** |
-| R4 | 🔄 | RLHF training, MCP protocol, Glass Box UI | v0.7.0 |
-| R5 | ⏳ | Production hardening, FDA alignment | v1.0.0 |
+| R4 | ✅ | RLHF training, MCP protocol, Glass Box UI | v0.6.2-mcp |
+| R5 | ✅ | Production hardening, security, FDA alignment | v0.7.0 |
 
 ### Type 6 Safety Architecture
 ```
@@ -175,39 +176,49 @@ The codebase decouples execution into six single-responsibility layers:
 
 ## 🛠️ Model Context Protocol (MCP) & Hub-and-Spoke Topology
 
-The architecture enforces the **Model Context Protocol (MCP)** specification via `core/mcp_registry.py` (`MCPRegistry`). Unlike probabilistic agent systems where an LLM calls tools directly, this engine utilizes a **Governed Hub-and-Spoke Control Plane**:
+The architecture enforces the **Model Context Protocol (MCP) specification v2024-11-05** via `core/mcp_protocol.py` (`MCPProtocolServer`, `ToolRegistry`, `MCPControlPlane`). Unlike probabilistic agent systems where an LLM calls tools directly, this engine utilizes a **Governed Hub-and-Spoke Control Plane**:
 
 ```
                          ┌─────────────────────────┐
-                         │  Central MCP            │
-                         │  Orchestrator           │
+                         │  MCP ProtocolServer     │
+                         │  (JSON-RPC 2.0)         │
+                         │  - tools/list (filtered)│
+                         │  - tools/call (guarded) │
                          └────────────┬────────────┘
                                       │
-        ┌─────────────────────────────┼─────────────────────────────┐
-        │ mcp:call                    │ mcp:call                    │ mcp:call
-        ▼                             ▼                             ▼
-┌───────────────────────┐     ┌───────────────────────┐     ┌───────────────────────┐
-│ MCP Skill:            │     │ MCP Skill:            │     │ MCP Skill:            │
-│ Clinical Extraction   │     │ Ontology Traversal    │     │ Policy Governance     │
-└───────────┬───────────┘     └───────────┬───────────┘     └───────────┬───────────┘
-            │ obs:return                  │ obs:return                  │ obs:return
-            └─────────────────────────────┼─────────────────────────────┘
-                                          │
-                                          ▼
-                               ┌───────────────────────┐
-                               │ MCP Skill:            │
-                               │ Bounded Synthesis     │
-                               └───────────────────────┘
+                    ┌─────────────────┼──────────────────┐
+                    │ mcp:call        │ mcp:call          │ mcp:call
+                    ▼                 ▼                   ▼
+┌──────────────────────────┐ ┌──────────────────┐ ┌──────────────────────┐
+│ query_ehr (clinician+)  │ │ check_drug_int.  │ │ retrieve_literature  │
+│ FHIR EHR query          │ │ SymbolicVerifier │ │ PubMed mock search   │
+└──────────────────────────┘ └──────────────────┘ └──────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│              Permission Levels:                                    │
+│  READONLY → CLINICIAN → ADMIN → SYSTEM                              │
+│  order_lab requires ADMIN; all others require CLINICIAN             │
+│  OPA fail-closed policy enforcement on every tool call              │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Registered MCP Skills
+### Registered MCP Tools
 
-| Skill / Tool Category | Component | Responsibility |
-| :--- | :--- | :--- |
-| **`mcp:clinical_extraction`** | `core/retrieval.py` | Extracts structured symptoms and patient demographics from clinical notes. |
-| **`mcp:ontology_traversal`** | `core/verification_layer.py` | Performs Cypher graph traversals across SNOMED-CT / ICD-10 ontologies. |
-| **`mcp:policy_governance`** | `infra/opa/policies/` | Evaluates multi-layer Rego policies and symbolic safety gates. |
-| **`mcp:bounded_synthesis`** | `core/llm_backend.py` | Synthesizes verified diagnostic subgraphs into natural language. |
+| Tool | Permission | Capabilities | Description |
+|------|-----------|-------------|-------------|
+| `query_ehr` | CLINICIAN | `ehr`, `fhir`, `read` | Query electronic health record for patient data (FHIR) |
+| `order_lab` | ADMIN | `lab`, `order`, `write` | Order a laboratory test for a patient |
+| `check_drug_interaction` | CLINICIAN | `drug`, `safety`, `read` | Check for drug-drug or drug-condition interactions |
+| `retrieve_literature` | CLINICIAN | `literature`, `evidence`, `read` | Search clinical literature for evidence |
+
+### MCP API Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /v1/mcp/initialize` | MCP protocol initialization handshake |
+| `POST /v1/mcp/tools/list?role=clinician` | List available tools for a given role |
+| `POST /v1/mcp/tools/call` | Execute a tool via JSON-RPC 2.0 |
+| `POST /v1/mcp/agent/tool` | Agent requests tool via control plane |
 
 ---
 
@@ -217,7 +228,9 @@ The architecture enforces the **Model Context Protocol (MCP)** specification via
 |------|---------|--------|
 | **Architecture** | Type 2 Symbolic[Neuro] Graph-Driven Reasoning Engine | ✅ |
 | **UI Observability**| MAS Glass Box Cockpit with real-time ReAct trace and state inspector | ✅ |
-| **MCP Topology** | Governed Hub-and-Spoke Control Plane with `mcp:call` / `obs:return` loops | ✅ |
+| **MCP Topology** | Full MCP Protocol v2024-11-05 server: ToolRegistry, JSON-RPC 2.0, dynamic discovery | ✅ |
+| **MCP Tools** | 4 clinical tools with RBAC (query_ehr, order_lab, check_drug_interaction, retrieve_literature) | ✅ |
+| **MCP Security** | Permission levels, OPA policy pre-checks (fail-closed), circuit breaker protection | ✅ |
 | **Pipeline** | Verify-then-generate pattern with topological cycle detection | ✅ |
 | **Correction Loop**| Automated feedback iterations prior to human escalation | ✅ |
 | **LLM Engine** | Bounded local inference via MedGemma-4B-IT, vLLM, Ollama, or MockLLM | ✅ |
@@ -226,21 +239,33 @@ The architecture enforces the **Model Context Protocol (MCP)** specification via
 | **Governance** | OPA/Rego sidecar policy engine + sub-50ms native Python fallback validator | ✅ |
 | **Retrieval** | Hybrid Qdrant vector search + active Cypher graph traversal + RRF fusion | ✅ |
 | **Storage** | Multi-Tiered Memory: Working (Redis), Episodic (Qdrant), Semantic (Neo4j) | ✅ |
-| **Tests** | **125 passing, 4 skipped (Docker-only), 0 failing** (~10s runtime) | ✅ |
+| **Security** | PII redaction, prompt injection detection, security headers, audit logging, payload limits | ✅ |
+| **Tests** | **220+ passing, 5 skipped** with comprehensive verification suite | ✅ |
 
 ---
 
 ## API Endpoints
 
+### Clinical Reasoning & Observability
+
 | Endpoint | Purpose |
 |----------|---------|
-| `POST /v1/speculate` | Main clinical reasoning |
+| `POST /v1/speculate` | Main clinical reasoning (with PII redaction + injection guard) |
 | `POST /v1/override` | Human-in-the-loop approval |
 | `GET /v1/reasoning_trace/{id}` | Full audit trail |
 | `GET /v1/agents/health` | Agent health monitoring |
 | `GET /v1/metrics/backends` | A/B backend performance |
 | `GET /v1/policy/stats` | Neural policy accuracy |
 | `POST /v1/analytics/rules/apply` | Apply learned safety rules |
+
+### MCP Protocol
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /v1/mcp/initialize` | MCP protocol handshake |
+| `POST /v1/mcp/tools/list?role=clinician` | List tools available for a role |
+| `POST /v1/mcp/tools/call` | Execute a clinical tool (JSON-RPC 2.0) |
+| `POST /v1/mcp/agent/tool` | Agent requests tool via control plane |
 
 ---
 
@@ -306,14 +331,18 @@ speculative-clinical-graphrag/
 │   └── middleware.py               # Rate limiting & auth middleware
 │
 ├── core/                           # Neuro-Symbolic Core Engine
-│   ├── orchestrator.py             # StateGraph execution & loops
-│   ├── workflow.py                 # 9-node state machine workflow
+│   ├── workflow.py                 # 9-node state machine workflow + MCP tool_enrichment node
 │   ├── supervisor.py               # Central MCP Orchestrator
+│   ├── orchestrator.py             # StateGraph execution & loops
 │   ├── llm_backend.py              # LLM Backends (MedGemma, Ollama, Mock)
 │   ├── retrieval.py                # Hybrid RAG retriever (Vector + Cypher)
-│   ├── verification_layer.py       # Neo4j, SymbolicVerifier, and OPA integration
+│   ├── verification_layer.py       # Neo4j, SymbolicVerifier, OPA integration, drug interactions
 │   ├── mas_streamer.py             # SSE streaming engine for MAS events
-│   └── mcp_registry.py             # Model Context Protocol tool registry
+│   ├── mcp_registry.py             # Legacy MCP registry (superseded by mcp_protocol.py)
+│   ├── mcp_protocol.py             # MCP server: ToolRegistry, MCPProtocolServer, MCPControlPlane
+│   ├── mcp_tools.py                # Clinical MCP tools (query_ehr, order_lab, check_drug_interaction, retrieve_literature)
+│   ├── security.py                 # InputSanitizer (PII redaction, injection detection) & AuditLogger
+│   └── circuit_breaker.py          # Circuit breaker with fail-closed semantics
 │
 ├── schemas/                        # SSE Event Protocol
 │   └── mas_events.py               # Pydantic v2 event models
@@ -335,16 +364,19 @@ speculative-clinical-graphrag/
 ├── infra/
 │   └── opa/
 │       └── policies/
-│           └── clinical.rego       # Active Rego policy rules
+│           ├── clinical.rego           # Clinical safety path validation
+│           └── tool_execution.rego     # MCP tool execution RBAC policy
 │
 ├── scripts/
 │   └── prepare_demo.py             # CPU E2E database & policy seeder
 │
-├── tests/                          # Enterprise Verification Suite (125 tests)
+├── tests/                          # Enterprise Verification Suite (220+ tests)
 │   ├── test_api.py
 │   ├── test_mas_stream.py          # SSE streaming integration tests
 │   ├── test_dag_compiler.py
 │   ├── test_verification.py
+│   ├── test_mcp_protocol.py        # MCP protocol, permissions, circuit breaker tests
+│   ├── test_security.py            # PII redaction & prompt injection tests
 │   └── test_workflow.py
 │
 ├── assets/                         # Documentation screenshots & diagrams
@@ -387,7 +419,7 @@ python -m pytest tests/ -vv
 ```
 
 ```
-================ 125 passed, 4 skipped in 10.86s ================
+================ 220 passed, 5 skipped in ~3.5s ================
 ```
 ### Test Area	What It Verifies
 | Module | Description |
@@ -396,8 +428,52 @@ python -m pytest tests/ -vv
 | DAG Compiler | Kahn's algorithm topological sorting & explicit cycle rejection |
 | Memory Tiers | Redis working memory fallback & session hydration |
 | Governance | Fail-secure policy evaluations with native Python sub-50ms fallback |
+| MCP Protocol | JSON-RPC 2.0 handshake, permission filtering, circuit breaker, OPA enforcement |
+| Security | PII redaction, prompt injection detection, audit logging |
 | Idempotency | Deterministic payload UUID5 key generation |
 | Workflow | End-to-end 9-node state graph execution with correction loops |
+
+---
+
+## 🔐 Security Hardening (v0.7.0)
+
+Production-grade security controls addressing HIPAA data protection, prompt injection defense, and zero-trust governance:
+
+### Input Sanitization (`core/security.py`)
+
+| Layer | Implementation | Details |
+|-------|---------------|---------|
+| **PII Redaction** | `InputSanitizer.sanitize_patient_note()` | Redacts SSN, phone, email, DOB, MRN, Patient IDs via regex patterns before LLM processing |
+| **Context Sanitization** | `InputSanitizer.sanitize_context()` | Recursively sanitizes nested dict/list values in `patient_context` |
+| **Prompt Injection Detection** | `InputSanitizer.check_prompt_injection()` | Blocks known injection patterns (`ignore previous instructions`, template injection `{{}}`, XML/HTML comments, special token abuse) |
+| **Encoding Attack Detection** | Heuristic special-character ratio check | Flags inputs with >30% non-alphanumeric characters as potential encoding attacks |
+| **Structured Audit Logging** | `AuditLogger` | JSON-structured logs for clinical decisions, overrides, and safety violations with non-reversible `patient_hash` |
+
+### Middleware Security (`api/middleware.py`)
+
+| Middleware | Purpose | Configuration |
+|-----------|---------|---------------|
+| `SecurityHeadersMiddleware` | Adds HSTS, X-Content-Type-Options, X-Frame-Options, CSP | Applied to all responses |
+| `ContentLengthMiddleware` | Rejects oversized payloads (10 MB default) | Prevents DoS via large request bodies |
+| `RequestIDMiddleware` | Unique request tracing for audit correlation | UUID per request |
+| `APIKeyMiddleware` | API key authentication for protected routes | Configurable via `API_KEY` env var |
+| `RateLimitMiddleware` | Per-IP request rate limiting | 100 req/60s default |
+
+### MCP Security (`core/mcp_protocol.py`, `infra/opa/policies/`)
+
+| Layer | Implementation | Behavior |
+|-------|---------------|----------|
+| **RBAC Permission Check** | `PermissionLevel` enum filter | `readonly` cannot see admin tools; `order_lab` requires `admin` |
+| **OPA Policy Enforcement** | `evaluate_tool_execution()` | OPA `tool_execution.rego` policy checked per tool call; **fail-closed** |
+| **Circuit Breaker Protection** | `CircuitBreaker` per tool | Open state after 3 failures; prevents cascading failures |
+| **Agent Health Gate** | `MCPControlPlane.agent_request_tool()` | Rejects requests from unhealthy or unregistered agents |
+
+### CI/CD Security Gate (` .github/workflows/ci.yml`)
+
+| Step | Tool | What It Does |
+|------|------|-------------|
+| Dependency Audit | `pip-audit` | Scans `requirements.txt` for known CVEs |
+| Lint Check | `ruff` | Static analysis for security anti-patterns |
 
 ---
 

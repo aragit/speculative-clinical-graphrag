@@ -18,6 +18,29 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Request-ID"] = getattr(request.state, 'request_id', 'unknown')
+        return response
+
+
+class ContentLengthMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, max_bytes: int = 10 * 1024 * 1024):
+        super().__init__(app)
+        self.max_bytes = max_bytes
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > self.max_bytes:
+            return JSONResponse(status_code=413, content={"detail": "Payload too large"})
+        return await call_next(request)
+
+
 class APIKeyMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, api_key: str = None):
         super().__init__(app)

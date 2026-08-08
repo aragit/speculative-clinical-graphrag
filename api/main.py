@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Request
@@ -13,7 +14,10 @@ from api.schemas import (
     HealthResponse, OverrideRequest, OverrideResponse,
 )
 from api.dependencies import get_llm_router, get_neo4j_verifier, get_symbolic_verifier, get_opa_client
-from api.middleware import RequestIDMiddleware, APIKeyMiddleware, RateLimitMiddleware
+from api.middleware import (
+    RequestIDMiddleware, APIKeyMiddleware, RateLimitMiddleware,
+    SecurityHeadersMiddleware, ContentLengthMiddleware,
+)
 from core.workflow import SpeculativeGraphRAG
 from core.llm_backend import MockLLMBackend
 from core.mas_streamer import MASStreamer
@@ -22,6 +26,7 @@ from core.persistence import get_trace_store, TraceStore
 from core.mcp_protocol import ToolRegistry, MCPProtocolServer, MCPControlPlane
 from core.mcp_tools import register_all_clinical_tools
 from core.circuit_breaker import CircuitBreaker
+from core.security import InputSanitizer, AuditLogger
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,8 @@ app = FastAPI(
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(ContentLengthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -84,6 +91,8 @@ mcp_control_plane = MCPControlPlane(
     agent_registry=rag.agent_registry,
 )
 rag.mcp = mcp_control_plane
+
+sanitizer = InputSanitizer()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -139,11 +148,31 @@ async def health():
 @app.post("/v1/speculate", response_model=SpeculateResponse)
 async def speculate(request: SpeculateRequest, fastapi_request: Request):
     try:
+        # Prompt injection check
+        injection_check = sanitizer.check_prompt_injection(request.patient_note)
+        if not injection_check["safe"]:
+            audit = AuditLogger(
+                request_id=getattr(fastapi_request.state, 'request_id', None)
+            )
+            audit.log_safety_violation(
+                trace_id="blocked",
+                violation_type="prompt_injection",
+                details="; ".join(injection_check["violations"]),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Input blocked: potential prompt injection detected",
+            )
+
         ab_variant = fastapi_request.headers.get("X-AB-Variant")
         ab_seed = fastapi_request.headers.get("X-AB-Seed", "")
+
+        safe_note = sanitizer.sanitize_patient_note(request.patient_note)
+        safe_context = sanitizer.sanitize_context(request.patient_context)
+
         result = await rag.run(
-            patient_note=request.patient_note,
-            patient_context=request.patient_context,
+            patient_note=safe_note,
+            patient_context=safe_context,
             backend_key=request.preferred_backend,
         )
         # result is GraphState (pydantic) or dict for backward compat
@@ -167,12 +196,23 @@ async def speculate(request: SpeculateRequest, fastapi_request: Request):
             "status": get("status"),
             "validation_mode": get("validation_mode", "symbolic_only"),
             "backend_key": get("backend_key", ""),
-            "patient_note": request.patient_note,
+            "patient_note": safe_note,
             "ab_variant": ab_variant,
             "ab_metadata": ab_metadata,
             "created_at": datetime.utcnow().isoformat(),
         }
         await trace_store.save(trace_id, trace_record)
+
+        audit = AuditLogger(
+            request_id=getattr(fastapi_request.state, 'request_id', None)
+        )
+        audit.log_decision(
+            trace_id=trace_id,
+            decision=get("status", "error"),
+            reasoning=get("reasoning_trace", ""),
+            patient_hash=hashlib.sha256(request.patient_note.encode()).hexdigest()[:16],
+        )
+
         return SpeculateResponse(
             proposed_path=get_list("proposed_path"),
             validation=get_dict("validation_result"),
@@ -190,6 +230,8 @@ async def speculate(request: SpeculateRequest, fastapi_request: Request):
             ab_variant=ab_variant,
             ab_metadata=ab_metadata,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("speculate failed")
         raise HTTPException(status_code=500, detail=str(e))

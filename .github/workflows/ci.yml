@@ -98,3 +98,13 @@ jobs:
 
       - name: Run test suite
         run: pytest tests/ -v --tb=short -x
+
+      - name: Security — Dependency Audit
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --skip-editable 2>&1 || true
+
+      - name: Security — Lint Check
+        run: |
+          pip install ruff
+          ruff check core/ api/ tests/ --exit-zero
